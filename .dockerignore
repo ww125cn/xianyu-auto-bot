@@ -99,6 +99,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# 更新文件目录
+update/
+
 # 数据目录（运行时挂载）
 data/
 backups/

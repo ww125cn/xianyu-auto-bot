@@ -59,24 +59,35 @@ class DBManager:
         # 初始化Fernet加密对象，用于加密cookies表中的密码
         self.encryption_key = os.environ.get('ENCRYPTION_KEY')
         if not self.encryption_key:
-            # 如果环境变量中没有密钥，使用默认密钥（仅用于开发环境）
-            self.encryption_key = 'default_encryption_key_please_change_in_production'
+            # 生产环境不允许使用默认密钥（否则会导致“所有实例同密钥”，数据泄露后可被批量解密）
+            debug_mode = os.getenv('DEBUG', 'false').lower() == 'true'
+            if debug_mode:
+                # 仅用于本地开发/调试
+                self.encryption_key = 'dev_only_default_encryption_key_please_change'
+            else:
+                raise RuntimeError("ENCRYPTION_KEY is required when DEBUG=false")
         # 确保密钥长度正确
         if len(self.encryption_key) < 32:
             self.encryption_key = hashlib.sha256(self.encryption_key.encode()).hexdigest()
         self.fernet = Fernet(base64.urlsafe_b64encode(self.encryption_key[:32].encode()))
 
-        # SQL日志配置 - 默认启用
-        self.sql_log_enabled = True  # 默认启用SQL日志
+        # SQL日志配置 - 默认关闭（避免将cookie/密码/API key等写入日志）
+        self.sql_log_enabled = False
         self.sql_log_level = 'INFO'  # 默认使用INFO级别
+        self.sql_log_include_params = False  # 默认不输出SQL参数（避免泄密）
 
         # 允许通过环境变量覆盖默认设置
         if os.getenv('SQL_LOG_ENABLED'):
             self.sql_log_enabled = os.getenv('SQL_LOG_ENABLED', 'true').lower() == 'true'
         if os.getenv('SQL_LOG_LEVEL'):
             self.sql_log_level = os.getenv('SQL_LOG_LEVEL', 'INFO').upper()
+        if os.getenv('SQL_LOG_INCLUDE_PARAMS'):
+            self.sql_log_include_params = os.getenv('SQL_LOG_INCLUDE_PARAMS', 'false').lower() == 'true'
 
-        logger.info(f"SQL日志已启用，日志级别: {self.sql_log_level}")
+        if self.sql_log_enabled:
+            logger.info(f"SQL日志已启用，日志级别: {self.sql_log_level}, include_params={self.sql_log_include_params}")
+        else:
+            logger.info("SQL日志已关闭")
 
         self.init_db()
     
@@ -512,6 +523,25 @@ class DBManager:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (cookie_id) REFERENCES cookies(id) ON DELETE CASCADE
+            )
+            ''')
+
+            # 创建安全事件日志表
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS security_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                event_level TEXT NOT NULL CHECK (event_level IN ('info', 'warning', 'error', 'critical')),
+                ip_address TEXT,
+                user_agent TEXT,
+                endpoint TEXT,
+                request_method TEXT,
+                request_params TEXT,
+                user_id INTEGER,
+                username TEXT,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
             )
             ''')
 
@@ -1304,6 +1334,10 @@ class DBManager:
         if not self.sql_log_enabled:
             return
 
+        # 默认不输出参数，避免敏感信息泄露（cookie/password/api_key等）
+        if not self.sql_log_include_params:
+            params = None
+
         # 格式化参数
         params_str = ""
         if params:
@@ -1312,8 +1346,15 @@ class DBManager:
                     # 限制参数长度，避免日志过长
                     formatted_params = []
                     for param in params:
-                        if isinstance(param, str) and len(param) > 100:
-                            formatted_params.append(f"{param[:100]}...")
+                        # 对可能的敏感值做统一脱敏（即便开启 include_params 也尽量避免泄露）
+                        if isinstance(param, str):
+                            lowered_sql = sql.lower()
+                            if any(k in lowered_sql for k in ["password", "cookie", "api_key", "secret", "token", "smtp_"]):
+                                formatted_params.append("<redacted>")
+                            elif len(param) > 100:
+                                formatted_params.append(f"{param[:100]}...")
+                            else:
+                                formatted_params.append(repr(param))
                         else:
                             formatted_params.append(repr(param))
                     params_str = f" | 参数: [{', '.join(formatted_params)}]"
@@ -3019,6 +3060,26 @@ class DBManager:
             except Exception as e:
                 logger.error(f"获取系统设置失败: {e}")
                 return None
+
+    def log_security_event(self, event_type: str, event_level: str, ip_address: str = None, 
+                         user_agent: str = None, endpoint: str = None, 
+                         request_method: str = None, request_params: str = None, 
+                         user_id: int = None, username: str = None, 
+                         description: str = None):
+        """记录安全事件日志"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                self._execute_sql(cursor, '''
+                INSERT INTO security_events 
+                (event_type, event_level, ip_address, user_agent, endpoint, 
+                 request_method, request_params, user_id, username, description)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (event_type, event_level, ip_address, user_agent, endpoint, 
+                     request_method, request_params, user_id, username, description))
+                self.conn.commit()
+            except Exception as e:
+                logger.error(f"记录安全事件失败: {e}")
 
     def set_system_setting(self, key: str, value: str, description: str = None) -> bool:
         """设置系统设置"""

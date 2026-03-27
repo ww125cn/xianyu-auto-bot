@@ -27,7 +27,7 @@ import { Toast } from '@/components/common/Toast'
 
 // Protected route wrapper
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, token: storeToken, user, _hasHydrated, setAuth, clearAuth } = useAuthStore()
+  const { isAuthenticated, token: storeToken, _hasHydrated, setAuth, clearAuth } = useAuthStore()
   const [authState, setAuthState] = useState<'checking' | 'authenticated' | 'unauthenticated'>('checking')
   const [showDisclaimer, setShowDisclaimer] = useState(false)
   const checkingRef = useRef(false)

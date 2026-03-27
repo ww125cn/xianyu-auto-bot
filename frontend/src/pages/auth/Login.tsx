@@ -6,6 +6,8 @@ import { login, verifyToken, getRegistrationStatus, generateCaptcha, verifyCaptc
 import { useAuthStore } from '@/store/authStore'
 import { useUIStore } from '@/store/uiStore'
 import { cn } from '@/utils/cn'
+import { safeInput } from '@/utils/xss'
+import { validateUsername, validatePassword, validateEmail, validateVerificationCode } from '@/utils/validation'
 import { ButtonLoading } from '@/components/common/Loading'
 import { GeetestCaptcha, type GeetestResult } from '@/components/common/GeetestCaptcha'
 
@@ -164,16 +166,45 @@ export function Login() {
     try {
       let loginData: any = {}
       if (loginType === 'username') {
-        if (!username || !password) { addToast({ type: 'error', message: '请输入用户名和密码' }); setLoading(false); return }
+        // 验证用户名
+        const usernameValidation = validateUsername(username)
+        if (!usernameValidation.isValid) { addToast({ type: 'error', message: usernameValidation.error }); setLoading(false); return }
+        
+        // 验证密码
+        const passwordValidation = validatePassword(password)
+        if (!passwordValidation.isValid) { addToast({ type: 'error', message: passwordValidation.error }); setLoading(false); return }
+        
         if (loginCaptchaEnabled && !geetestResult) { addToast({ type: 'error', message: '请完成滑动验证' }); setLoading(false); return }
-        loginData = { username, password, geetest_challenge: geetestResult?.challenge, geetest_validate: geetestResult?.validate, geetest_seccode: geetestResult?.seccode }
+        
+        // 对用户输入进行安全处理，防止 XSS
+        const safeUsername = safeInput(username)
+        loginData = { username: safeUsername, password, geetest_challenge: geetestResult?.challenge, geetest_validate: geetestResult?.validate, geetest_seccode: geetestResult?.seccode }
       } else if (loginType === 'email-password') {
-        if (!email || !emailPassword) { addToast({ type: 'error', message: '请输入邮箱和密码' }); setLoading(false); return }
+        // 验证邮箱
+        const emailValidation = validateEmail(email)
+        if (!emailValidation.isValid) { addToast({ type: 'error', message: emailValidation.error }); setLoading(false); return }
+        
+        // 验证密码
+        const passwordValidation = validatePassword(emailPassword)
+        if (!passwordValidation.isValid) { addToast({ type: 'error', message: passwordValidation.error }); setLoading(false); return }
+        
         if (loginCaptchaEnabled && !geetestResult) { addToast({ type: 'error', message: '请完成滑动验证' }); setLoading(false); return }
-        loginData = { email, password: emailPassword, geetest_challenge: geetestResult?.challenge, geetest_validate: geetestResult?.validate, geetest_seccode: geetestResult?.seccode }
+        
+        // 对用户输入进行安全处理，防止 XSS
+        const safeEmail = safeInput(email)
+        loginData = { email: safeEmail, password: emailPassword, geetest_challenge: geetestResult?.challenge, geetest_validate: geetestResult?.validate, geetest_seccode: geetestResult?.seccode }
       } else {
-        if (!emailForCode || !verificationCode) { addToast({ type: 'error', message: '请输入邮箱和验证码' }); setLoading(false); return }
-        loginData = { email: emailForCode, verification_code: verificationCode }
+        // 验证邮箱
+        const emailValidation = validateEmail(emailForCode)
+        if (!emailValidation.isValid) { addToast({ type: 'error', message: emailValidation.error }); setLoading(false); return }
+        
+        // 验证验证码
+        const codeValidation = validateVerificationCode(verificationCode)
+        if (!codeValidation.isValid) { addToast({ type: 'error', message: codeValidation.error }); setLoading(false); return }
+        
+        // 对用户输入进行安全处理，防止 XSS
+        const safeEmailForCode = safeInput(emailForCode)
+        loginData = { email: safeEmailForCode, verification_code: verificationCode }
       }
       const result = await login(loginData)
       if (result.success && result.token) {

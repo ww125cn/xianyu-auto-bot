@@ -256,8 +256,15 @@ cd frontend
 npm install
 npm run build
 
-# 4. 启动服务（返回项目根目录）
+# 4 配置环境
+生成 64 位随机 hex 字符串作为加密密钥
+python -c "import secrets; print(secrets.token_hex(32))"
+
+$env:SQL_LOG_ENABLED = "false"
+$env:ENCRYPTION_KEY = "36737d97d7d6611500703a6ba634ca476a9d52a00fdbd94071aa5d974e4c9e5e"
+# 5. 启动服务（返回项目根目录）
 cd ..
+
 python Start.py
 
 # 5. 访问应用
@@ -285,6 +292,8 @@ python Start.py
 
 ```bash
 # 终端1：启动后端
+$env:SQL_LOG_ENABLED = "false"
+$env:ENCRYPTION_KEY = "36737d97d7d6611500703a6ba634ca476a9d52a00fdbd94071aa5d974e4c9e5e"
 python Start.py
 
 # 终端2：启动前端开发服务器

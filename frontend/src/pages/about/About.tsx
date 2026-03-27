@@ -35,7 +35,7 @@ export function About() {
   const [showUpdateModal, setShowUpdateModal] = useState(false)
   const [showChangelogModal, setShowChangelogModal] = useState(false)
   const [changelog, setChangelog] = useState<UpdateInfo[]>([])
-  const [changelogHtml, setChangelogHtml] = useState<string | null>(null)
+  const [changelogTextLines, setChangelogTextLines] = useState<string[]>([])
   const [loadingChangelog, setLoadingChangelog] = useState(false)
 
   // 检查更新
@@ -83,8 +83,8 @@ export function About() {
   // 获取更新日志
   const loadChangelog = useCallback(async () => {
     setLoadingChangelog(true)
-    setChangelogHtml(null)
     setChangelog([])
+    setChangelogTextLines([])
     try {
       const response = await fetch('/api/version/changelog')
       const result = await response.json()
@@ -96,11 +96,8 @@ export function About() {
 
       // 支持 {data: {updates: [...]}} 格式
       if (result.data && result.data.updates && Array.isArray(result.data.updates)) {
-        // 将 updates 数组合并成 HTML 字符串
-        const htmlContent = result.data.updates.join('<br/>')
-        setChangelogHtml(htmlContent)
-      } else if (result.html) {
-        setChangelogHtml(result.html)
+        // 只按纯文本渲染，避免 XSS
+        setChangelogTextLines(result.data.updates.map((s: unknown) => String(s)))
       } else if (result.changelog) {
         setChangelog(result.changelog)
       } else if (Array.isArray(result)) {
@@ -444,7 +441,7 @@ export function About() {
                 稍后再说
               </button>
               <a
-                href={updateInfo.download_url || 'https://github.com/zhinianboke/xianyu-auto-reply/releases'}
+                href={updateInfo.download_url || 'https://github.com/ww125cn/xianyu-auto-bot'}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="btn-ios-primary"
@@ -475,11 +472,14 @@ export function About() {
                 <div className="flex items-center justify-center py-12">
                   <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
                 </div>
-              ) : changelogHtml ? (
-                <div 
-                  className="changelog-html prose prose-sm dark:prose-invert max-w-none"
-                  dangerouslySetInnerHTML={{ __html: changelogHtml }}
-                />
+              ) : changelogTextLines.length > 0 ? (
+                <div className="space-y-2 text-sm text-slate-600 dark:text-slate-400">
+                  {changelogTextLines.map((line, idx) => (
+                    <div key={idx} className="whitespace-pre-wrap break-words">
+                      {line}
+                    </div>
+                  ))}
+                </div>
               ) : changelog.length === 0 ? (
                 <div className="text-center py-12 text-slate-500 dark:text-slate-400">
                   <FileText className="w-12 h-12 mx-auto mb-3 text-slate-300 dark:text-slate-600" />

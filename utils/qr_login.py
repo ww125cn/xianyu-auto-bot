@@ -204,14 +204,17 @@ class QRLoginManager:
             # 创建新的会话
             session_id = str(uuid.uuid4())
             session = QRLoginSession(session_id)
+            logger.info(f"开始生成二维码，会话ID: {session_id}, 代理: {self.proxy}")
 
             # 1. 获取m_h5_tk
+            logger.info(f"[步骤1] 开始获取m_h5_tk: {session_id}")
             await self._get_mh5tk(session)
-            logger.info(f"获取m_h5_tk成功: {session_id}")
+            logger.info(f"[步骤1] 获取m_h5_tk成功: {session_id}")
 
             # 2. 获取登录参数
+            logger.info(f"[步骤2] 开始获取登录参数: {session_id}")
             login_params = await self._get_login_params(session)
-            logger.info(f"获取登录参数成功: {session_id}")
+            logger.info(f"[步骤2] 获取登录参数成功: {session_id}, 参数: {login_params.keys()}")
 
             # 3. 生成二维码
             async with httpx.AsyncClient(follow_redirects=True, timeout=self.timeout, proxy=self.proxy) as client:
@@ -279,16 +282,22 @@ class QRLoginManager:
                     raise GetLoginQRCodeError("获取登录二维码失败")
 
         except httpx.ConnectTimeout as e:
-            logger.error(f"连接超时: {e}")
-            return {'success': False, 'message': f'连接超时，请检查网络或尝试使用代理'}
+            logger.error(f"[错误] 连接超时: {e}, 代理: {self.proxy}")
+            return {'success': False, 'message': f'连接超时，请检查网络或尝试使用代理。当前代理: {self.proxy}'}
         except httpx.ReadTimeout as e:
-            logger.error(f"读取超时: {e}")
-            return {'success': False, 'message': f'读取超时，服务器响应过慢'}
+            logger.error(f"[错误] 读取超时: {e}, 代理: {self.proxy}")
+            return {'success': False, 'message': f'读取超时，服务器响应过慢。当前代理: {self.proxy}'}
         except httpx.ConnectError as e:
-            logger.error(f"连接错误: {e}")
-            return {'success': False, 'message': f'连接错误，请检查网络或代理设置'}
+            logger.error(f"[错误] 连接错误: {e}, 代理: {self.proxy}")
+            return {'success': False, 'message': f'连接错误，请检查网络或代理设置。当前代理: {self.proxy}'}
+        except GetLoginParamsError as e:
+            logger.error(f"[错误] 获取登录参数失败: {e}")
+            return {'success': False, 'message': f'获取登录参数失败: {str(e)}'}
+        except GetLoginQRCodeError as e:
+            logger.error(f"[错误] 获取二维码失败: {e}")
+            return {'success': False, 'message': f'获取二维码失败: {str(e)}'}
         except Exception as e:
-            logger.exception("二维码生成过程中发生异常")
+            logger.exception(f"[错误] 二维码生成过程中发生异常: {e}")
             return {'success': False, 'message': f'生成二维码失败: {str(e)}'}
     
     async def _poll_qrcode_status(self, session: QRLoginSession) -> httpx.Response:

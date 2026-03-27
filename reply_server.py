@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -43,7 +43,7 @@ KEYWORDS_FILE = Path(__file__).parent / "回复关键字.txt"
 # 简单的用户认证配置
 ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin123"  # 系统初始化时的默认密码
-TOKEN_EXPIRE_TIME = 24 * 60 * 60  # token过期时间：24小时
+TOKEN_EXPIRE_TIME = 30 * 60  # 30 分钟
 
 # HTTP Bearer认证
 security = HTTPBearer(auto_error=False)
@@ -59,11 +59,16 @@ def generate_csrf_token() -> str:
 qr_check_locks = defaultdict(lambda: asyncio.Lock())
 qr_check_processed = {}  # 记录已处理的session: {session_id: {'processed': bool, 'timestamp': float}}
 
-# 速率限制设置
+# 速率限制设置 - 更严格的限制
 RATE_LIMITS = {
-    'default': {'max_requests': 60, 'window_seconds': 60},  # 每分钟60个请求
-    'login': {'max_requests': 10, 'window_seconds': 60},  # 登录接口每分钟10个请求
-    'api': {'max_requests': 100, 'window_seconds': 60},  # API接口每分钟100个请求
+    'default': {'max_requests': 666, 'window_seconds': 60},  # 每分钟666个请求
+    'login': {'max_requests': 30, 'window_seconds': 60},  # 登录接口每分钟30个请求
+    'api': {'max_requests': 666, 'window_seconds': 60},  # API接口每分钟666个请求
+    'register': {'max_requests': 50, 'window_seconds': 60},  # 注册接口每分钟50个请求
+    'captcha': {'max_requests': 10, 'window_seconds': 60},  # 验证码接口每分钟10个请求
+    'verification': {'max_requests': 5, 'window_seconds': 60},  # 验证接口每分钟5个请求
+    'verify': {'max_requests': 500, 'window_seconds': 60},  # /verify 接口（检查登录状态）每分钟500个请求
+    'cookies': {'max_requests': 500, 'window_seconds': 60},  # /cookies 接口每分钟500个请求
 }
 
 # 存储请求记录
@@ -349,9 +354,148 @@ else:
 # 初始化文件日志收集器
 setup_file_logging()
 
+# 初始化安全扫描器
+from utils.security_scanner import security_scanner
+security_scanner.start_periodic_scan()
+
 # 添加一条测试日志
 from loguru import logger
 logger.info("Web服务器启动，文件日志收集器已初始化")
+logger.info("安全扫描器已启动，开始定期安全扫描")
+
+# ==================== One-time admin setup (首次初始化向导) ====================
+SETUP_COMPLETED_KEY = "setup_completed"
+
+def _is_setup_required() -> bool:
+    """
+    判断是否需要首次初始化：
+    - setup_completed=true：不需要
+    - admin 仍使用默认密码：admin123：需要
+    - admin 已不是默认密码但未标记：自动补写 setup_completed=true
+    """
+    try:
+        completed = (db_manager.get_system_setting(SETUP_COMPLETED_KEY) or "").lower() == "true"
+        if completed:
+            return False
+
+        using_default = db_manager.verify_user_password(ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD)
+        if using_default:
+            return True
+
+        # 兼容老库：已改过密码则自动标记完成
+        db_manager.set_system_setting(SETUP_COMPLETED_KEY, "true", "首次初始化是否完成")
+        return False
+    except Exception as e:
+        logger.error(f"判断是否需要首次初始化失败: {e}")
+        return False
+
+@app.middleware("http")
+async def setup_gate_middleware(request: Request, call_next):
+    """
+    首次部署强制进入 /setup 设置管理员密码。
+    设置完成后 /setup 永久不可访问（404）。
+    """
+    path = request.url.path
+
+    # 放行路径 - 只放行最小必要的路径
+    allow_prefixes = (
+        "/setup",
+        "/static/",
+        "/health",
+        "/generate-captcha",
+        "/verify-captcha",
+        "/api/captcha",
+        "/geetest/",
+    )
+    allow_exact = {"/logout", "/verify", "/registration-status", "/system-settings/public"}
+
+    # 检查是否需要初始化
+    setup_required = _is_setup_required()
+    
+    if setup_required:
+        # 如果需要初始化，先检查是否是 /setup 或其他必须放行的路径
+        if path.startswith("/setup") or any(path.startswith(p) for p in allow_prefixes) or path in allow_exact:
+            return await call_next(request)
+        # 其他所有路径（包括 /login、/register）都重定向到 /setup
+        if path.startswith("/api/") or path.startswith("/admin/") or path.startswith("/cookies/") or path.startswith("/items/"):
+            return JSONResponse(status_code=503, content={"detail": "Setup required", "setup_required": True})
+        return RedirectResponse(url="/setup", status_code=302)
+    else:
+        # 不需要初始化，正常放行
+        # 把 /login、/register 等正常路由加回来
+        full_allow_exact = {"/login", "/logout", "/register", "/verify", "/registration-status", "/system-settings/public"}
+        if path in full_allow_exact or any(path.startswith(p) for p in allow_prefixes):
+            return await call_next(request)
+        return await call_next(request)
+
+@app.get("/setup", response_class=HTMLResponse)
+async def setup_page():
+    """首次初始化页面：仅当需要初始化时可访问，否则返回 404。"""
+    if not _is_setup_required():
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    return HTMLResponse(
+        """
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>首次初始化 - 设置管理员密码</title>
+  <style>
+    body { font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif; background:#0b1220; color:#e5e7eb; margin:0; }
+    .wrap { max-width: 520px; margin: 10vh auto; padding: 24px; }
+    .card { background:#0f172a; border:1px solid #243043; border-radius: 14px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+    h1 { font-size: 18px; margin: 0 0 8px; }
+    p { margin: 0 0 16px; color:#94a3b8; line-height: 1.6; }
+    label { display:block; font-size: 13px; color:#cbd5e1; margin: 12px 0 6px; }
+    input { width:100%; box-sizing:border-box; padding: 10px 12px; border-radius: 10px; border:1px solid #334155; background:#0b1220; color:#e5e7eb; }
+    button { width:100%; margin-top: 14px; padding: 10px 12px; border: 0; border-radius: 10px; background:#2563eb; color:white; font-weight: 600; cursor:pointer; }
+    .foot { margin-top: 12px; font-size: 12px; color:#64748b; }
+    code { color:#93c5fd; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>首次初始化：设置管理员密码</h1>
+      <p>检测到管理员仍在使用默认密码（<code>admin123</code>）。为保证安全，请先设置一个强密码。设置成功后，此页面将永久不可访问。</p>
+      <form method="post" action="/setup">
+        <label>新密码</label>
+        <input name="new_password" type="password" minlength="12" required placeholder="至少 12 位，建议包含大小写/数字/符号" />
+        <label>确认密码</label>
+        <input name="confirm_password" type="password" minlength="12" required placeholder="再次输入新密码" />
+        <button type="submit">保存并继续</button>
+      </form>
+      <div class="foot">如果你已经改过密码但仍出现此页面，请检查数据库可写权限与 <code>system_settings</code> 表。</div>
+    </div>
+  </div>
+</body>
+</html>
+        """,
+        status_code=200,
+    )
+
+@app.post("/setup", response_class=HTMLResponse)
+async def setup_submit(new_password: str = Form(...), confirm_password: str = Form(...)):
+    """首次初始化提交：设置 admin 密码并写入 setup_completed 标记。"""
+    if not _is_setup_required():
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    if not new_password or len(new_password) < 12:
+        return HTMLResponse("密码长度至少 12 位。<a href=\"/setup\">返回</a>", status_code=400)
+    if new_password != confirm_password:
+        return HTMLResponse("两次输入的密码不一致。<a href=\"/setup\">返回</a>", status_code=400)
+    if new_password == DEFAULT_ADMIN_PASSWORD:
+        return HTMLResponse("新密码不能与默认密码相同。<a href=\"/setup\">返回</a>", status_code=400)
+
+    ok = db_manager.update_user_password(ADMIN_USERNAME, new_password)
+    if not ok:
+        return HTMLResponse("设置失败：无法更新管理员密码。<a href=\"/setup\">返回</a>", status_code=500)
+
+    db_manager.set_system_setting(SETUP_COMPLETED_KEY, "true", "首次初始化是否完成")
+    logger.warning("首次初始化完成：管理员密码已更新，setup 已锁定")
+    return RedirectResponse(url="/login", status_code=302)
 
 # 添加请求日志中间件
 @app.middleware("http")
@@ -378,8 +522,9 @@ async def csrf_protection_middleware(request, call_next):
             response.set_cookie(
                 key="csrf_token",
                 value=csrf_token,
-                httponly=False,
-                samesite="lax",
+                httponly=True,
+                samesite="strict",
+                # secure=True  # HTTPS 时设置
                 max_age=TOKEN_EXPIRE_TIME
             )
             return response
@@ -404,10 +549,20 @@ async def rate_limit_middleware(request, call_next):
     endpoint = request.url.path
     
     # 确定速率限制规则
-    if '/login' in endpoint or '/register' in endpoint:
+    if '/login' in endpoint:
         limit = RATE_LIMITS['login']
+    elif '/register' in endpoint:
+        limit = RATE_LIMITS['register']
+    elif '/captcha' in endpoint:
+        limit = RATE_LIMITS['captcha']
+    elif endpoint == '/verify':
+        limit = RATE_LIMITS['verify']
+    elif '/verify' in endpoint or '/verification' in endpoint:
+        limit = RATE_LIMITS['verification']
     elif '/api/' in endpoint:
         limit = RATE_LIMITS['api']
+    elif '/cookies' in endpoint:
+        limit = RATE_LIMITS['cookies']
     else:
         limit = RATE_LIMITS['default']
     
@@ -422,6 +577,16 @@ async def rate_limit_middleware(request, call_next):
         # 过滤出时间窗口内的请求
         recent_requests = [r for r in request_records[client_ip] if current_time - r[0] < limit['window_seconds']]
         if len(recent_requests) >= limit['max_requests']:
+            # 记录安全事件
+            db_manager.log_security_event(
+                event_type="rate_limit_exceeded",
+                event_level="warning",
+                ip_address=client_ip,
+                user_agent=request.headers.get("user-agent"),
+                endpoint=endpoint,
+                request_method=request.method,
+                description=f"速率限制触发: {limit['max_requests']} requests per {limit['window_seconds']} seconds"
+            )
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Too many requests"}
@@ -431,6 +596,74 @@ async def rate_limit_middleware(request, call_next):
     
     # 添加当前请求记录
     request_records[client_ip].append((current_time, endpoint))
+    
+    response = await call_next(request)
+    return response
+
+# 安全头中间件 - 添加内容安全策略 (CSP) 和其他安全头
+@app.middleware("http")
+async def security_headers_middleware(request, call_next):
+    response = await call_next(request)
+    
+    # 添加内容安全策略 (CSP)
+    # 允许极验验证码相关域名：static.geetest.com, api.geetest.com, static.geevisit.com, monitor.geetest.com, api.geevisit.com, dn-staticdown.qbox.me
+    # 允许 Google Fonts 相关域名：fonts.googleapis.com, fonts.gstatic.com
+    # 同时支持 HTTP 和 HTTPS 协议
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.geetest.com http://static.geetest.com https://api.geetest.com http://api.geetest.com https://static.geevisit.com http://static.geevisit.com https://monitor.geetest.com http://monitor.geetest.com https://api.geevisit.com http://api.geevisit.com https://dn-staticdown.qbox.me http://dn-staticdown.qbox.me; style-src 'self' 'unsafe-inline' https://static.geetest.com http://static.geetest.com https://static.geevisit.com http://static.geevisit.com https://fonts.googleapis.com http://fonts.googleapis.com; img-src 'self' data: https://* http://*; font-src 'self' https://static.geetest.com http://static.geetest.com https://static.geevisit.com http://static.geevisit.com https://fonts.gstatic.com http://fonts.gstatic.com; connect-src 'self' http://* https://*; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self';"
+    
+    # 添加其他安全头
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    
+    return response
+
+# 请求参数验证中间件
+@app.middleware("http")
+async def request_validation_middleware(request, call_next):
+    # 检查请求方法
+    if request.method in ["POST", "PUT", "PATCH"]:
+        try:
+            # 尝试解析 JSON 数据
+            if request.headers.get("content-type") and "application/json" in request.headers.get("content-type", ""):
+                try:
+                    body = await request.json()
+                    # 验证请求体中的参数
+                    if isinstance(body, dict):
+                        # 检查是否包含危险字段
+                        dangerous_fields = ["__proto__", "constructor", "prototype"]
+                        for field in dangerous_fields:
+                            if field in body:
+                                return JSONResponse(
+                                    status_code=400,
+                                    content={"detail": "Invalid request parameter"}
+                                )
+                        # 验证字符串参数，防止 XSS
+                        for key, value in body.items():
+                            if isinstance(value, str):
+                                # 检查是否包含潜在的 XSS 攻击代码
+                                if "<script" in value.lower() or "javascript:" in value.lower():
+                                    return JSONResponse(
+                                        status_code=400,
+                                        content={"detail": "Invalid request parameter"}
+                                    )
+                except Exception:
+                    # JSON 解析失败，继续处理
+                    pass
+        except Exception as e:
+            logger.error(f"请求参数验证失败: {e}")
+    
+    # 验证查询参数
+    for key, values in request.query_params.items():
+        for value in values:
+            # 检查是否包含潜在的 XSS 攻击代码
+            if isinstance(value, str) and ("<script" in value.lower() or "javascript:" in value.lower()):
+                return JSONResponse(
+                    status_code=400,
+                    content={"detail": "Invalid query parameter"}
+                )
     
     response = await call_next(request)
     return response
@@ -495,13 +728,13 @@ async def check_version():
     """检查最新版本（代理外部接口）"""
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.get('https://github.com/ww125cn/xianyu-auto-bot/blob/a3f3438e49ed929e10a32cd0b54fee37d1572ceb/update/Version.json')
+            response = await client.get('https://raw.githubusercontent.com/ww125cn/xianyu-auto-bot/refs/heads/main/update/Version.json')
             if response.status_code == 200:
                 try:
                     return response.json()
                 except Exception:
-                    # 如果不是有效JSON，返回HTML内容
-                    return {"html": response.text}
+                    # 不透传非JSON内容，避免前端渲染时产生XSS/供应链风险
+                    return {"error": True, "message": "远程版本信息不是有效JSON"}
             else:
                 return {"error": True, "message": f"远程服务返回状态码: {response.status_code}"}
     except Exception as e:
@@ -514,13 +747,13 @@ async def get_changelog():
     """获取更新日志（代理外部接口）"""
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.get('https://raw.githubusercontent.com/ww125cn/xianyu-auto-bot/a3f3438e49ed929e10a32cd0b54fee37d1572ceb/update/Version.json')
+            response = await client.get('https://raw.githubusercontent.com/ww125cn/xianyu-auto-bot/refs/heads/main/update/Update.json')
             if response.status_code == 200:
                 try:
                     return response.json()
                 except Exception:
-                    # 如果不是有效JSON，返回HTML内容
-                    return {"html": response.text}
+                    # 不透传非JSON内容，避免前端渲染时产生XSS/供应链风险
+                    return {"error": True, "message": "远程更新日志不是有效JSON"}
             else:
                 return {"error": True, "message": f"远程服务返回状态码: {response.status_code}"}
     except Exception as e:
@@ -602,6 +835,17 @@ async def register_route():
 async def login(request: LoginRequest):
     from db_manager import db_manager
 
+    # 首次初始化未完成时，禁止通过 API 登录绕过 /setup
+    if _is_setup_required():
+        return JSONResponse(
+            status_code=503,
+            content={
+                "success": False,
+                "message": "系统尚未完成首次初始化，请先访问 /setup 设置管理员密码",
+                "setup_required": True,
+            },
+        )
+
     # 判断登录方式
     if request.username and request.password:
         # 用户名/密码登录
@@ -635,6 +879,18 @@ async def login(request: LoginRequest):
                 )
 
         logger.warning(f"【{request.username}】登录失败：用户名或密码错误")
+        # 记录安全事件
+        db_manager.log_security_event(
+            event_type="login_failure",
+            event_level="warning",
+            ip_address=request.client.host,
+            user_agent=request.headers.get("user-agent"),
+            endpoint=request.url.path,
+            request_method=request.method,
+            request_params=str(request.query_params),
+            username=request.username,
+            description="用户名或密码错误"
+        )
         return LoginResponse(
             success=False,
             message="用户名或密码错误"
@@ -2308,11 +2564,12 @@ async def generate_qr_code(current_user: Dict[str, Any] = Depends(get_current_us
         else:
             log_with_user('warning', f"扫码登录二维码生成失败: {result.get('message', '未知错误')}", current_user)
 
-        return result
+        # 确保返回正确的 JSONResponse
+        return JSONResponse(content=result)
 
     except Exception as e:
         log_with_user('error', f"生成扫码登录二维码异常: {str(e)}", current_user)
-        return {'success': False, 'message': f'生成二维码失败: {str(e)}'}
+        return JSONResponse(content={'success': False, 'message': f'生成二维码失败: {str(e)}'})
 
 
 @app.get("/qr-login/check/{session_id}")
