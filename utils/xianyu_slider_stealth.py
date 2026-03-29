@@ -19,6 +19,14 @@ from typing import Optional, Tuple, List, Dict, Any, Callable
 from loguru import logger
 from collections import defaultdict
 
+# 导入AI学习器
+try:
+    from utils.slider_ai_learner import get_slider_learner, record_slider_attempt
+    AI_LEARNING_ENABLED = True
+except ImportError:
+    AI_LEARNING_ENABLED = False
+    logger.warning("AI学习器导入失败，滑块学习功能将不可用")
+
 # 导入配置
 try:
     from config import SLIDER_VERIFICATION
@@ -1242,6 +1250,111 @@ class XianyuSliderStealth:
             logger.error(f"【{self.pure_user_id}】生成轨迹时出错: {str(e)}")
             return []
     
+    def generate_human_trajectory_ai(self, distance: float, params: dict):
+        """
+        生成AI优化的人类化滑动轨迹
+        
+        Args:
+            distance: 滑动距离
+            params: AI优化的参数 {
+                'step_count': 步数,
+                'base_delay': 基础延迟,
+                'acceleration': 加速度模式 ('linear', 'ease_out', 'ease_in'),
+                'jitter_amount': 抖动幅度
+            }
+            
+        Returns:
+            List[Tuple[float, float, float]]: 轨迹点列表 [(x, y, delay), ...]
+            注意：x是绝对坐标（从起始位置开始的累计距离），不是相对移动距离
+        """
+        try:
+            logger.info(f"【{self.pure_user_id}】🧠 使用AI优化模型生成轨迹")
+            
+            step_count = params.get('step_count', 25)
+            base_delay = params.get('base_delay', 0.03)
+            acceleration = params.get('acceleration', 'ease_out')
+            jitter_amount = params.get('jitter_amount', 1.0)
+            
+            trajectory = []
+            current_pos = 0
+            total_delay = 0
+            
+            # 【关键】超调100-110%，确保滑块验证通过
+            target_distance = distance * random.uniform(2.0, 2.1)
+            
+            for i in range(step_count):
+                # 计算进度 (0 到 1)
+                progress = i / (step_count - 1) if step_count > 1 else 1
+                
+                # 根据加速度模式计算目标位置
+                if acceleration == 'ease_out':
+                    # 减速模式：先快后慢
+                    eased_progress = 1 - (1 - progress) ** 2
+                elif acceleration == 'ease_in':
+                    # 加速模式：先慢后快
+                    eased_progress = progress ** 2
+                else:
+                    # 线性模式
+                    eased_progress = progress
+                
+                # 计算目标位置（绝对坐标）- 使用超调距离
+                target_pos = target_distance * eased_progress
+                
+                # 添加随机抖动（模拟人类不精确性）
+                jitter = random.uniform(-jitter_amount, jitter_amount)
+                target_pos += jitter
+                
+                # 确保不会回退太多（不能小于上一个位置太多）
+                if target_pos < current_pos - 5:
+                    target_pos = current_pos - 5
+                
+                # 确保不会超出超调目标太多
+                if target_pos > target_distance + 5:
+                    target_pos = target_distance + 5
+                
+                # 计算延迟（添加随机性）
+                delay = base_delay * random.uniform(0.8, 1.2)
+                total_delay += delay
+                
+                # 添加到轨迹 (x=绝对坐标, y=随机抖动, delay)
+                # x是绝对坐标（从起始位置开始的累计距离）
+                y = random.uniform(0, 2)  # Y轴微小抖动
+                trajectory.append((target_pos, y, delay))
+                
+                current_pos = target_pos
+            
+            # 最后的微调，确保到达超调目标
+            if abs(target_distance - current_pos) > 1:
+                delay = base_delay * random.uniform(0.8, 1.2)
+                y = random.uniform(0, 2)
+                trajectory.append((target_distance, y, delay))
+            
+            logger.info(f"【{self.pure_user_id}】🧠 AI轨迹生成完成: {len(trajectory)}步, 原始距离={distance:.1f}px, 超调距离={target_distance:.1f}px, 最终位置={trajectory[-1][0]:.1f}px")
+            
+            # 保存轨迹数据
+            self.current_trajectory_data = {
+                "distance": distance,
+                "target_distance": target_distance,
+                "model": "ai_optimized",
+                "total_steps": len(trajectory),
+                "trajectory_points": trajectory.copy(),
+                "final_left_px": 0,
+                "completion_used": False,
+                "completion_steps": 0,
+                "base_delay": base_delay,
+                "acceleration": acceleration,
+                "jitter_amount": jitter_amount,
+                "steps": [t[0] for t in trajectory],
+                "delays": [t[2] for t in trajectory]
+            }
+            
+            return trajectory
+            
+        except Exception as e:
+            logger.error(f"【{self.pure_user_id}】🧠 AI轨迹生成失败: {str(e)}, 回退到默认模型")
+            # 回退到默认的物理模型
+            return self.generate_human_trajectory(distance)
+    
     def simulate_slide(self, slider_button: ElementHandle, trajectory):
         """模拟滑动 - 优化版本（基于高成功率策略）"""
         try:
@@ -2226,27 +2339,35 @@ class XianyuSliderStealth:
             return {}
     
     def solve_slider(self, max_retries: int = 3, fast_mode: bool = False):
-        """处理滑块验证（极速模式）
+        """处理滑块验证（AI增强极速模式）
         
         Args:
             max_retries: 最大重试次数（默认3次，因为同一个页面连续失败3次后就不会成功了）
             fast_mode: 快速查找模式（当已确认滑块存在时使用，减少等待时间）
         """
         failure_records = []
-        current_strategy = 'ultra_fast'  # 极速策略
+        
+        # 🧠 使用AI学习器获取推荐策略
+        if AI_LEARNING_ENABLED:
+            ai_learner = get_slider_learner(self.pure_user_id)
+            current_strategy = ai_learner.get_recommended_strategy()
+            logger.info(f"【{self.pure_user_id}】🧠 AI推荐策略: {current_strategy}")
+        else:
+            current_strategy = 'ultra_fast'
+        
+        start_time = time.time()
         
         for attempt in range(1, max_retries + 1):
             try:
-                logger.info(f"【{self.pure_user_id}】开始处理滑块验证... (第{attempt}/{max_retries}次尝试)")
+                logger.info(f"【{self.pure_user_id}】开始处理滑块验证... (第{attempt}/{max_retries}次尝试, 策略: {current_strategy})")
                 
                 # 如果不是第一次尝试，短暂等待后重试
                 if attempt > 1:
-                    retry_delay = random.uniform(0.5, 1.0)  # 减少等待时间
+                    retry_delay = random.uniform(0.5, 1.0)
                     logger.info(f"【{self.pure_user_id}】等待{retry_delay:.2f}秒后重试...")
                     time.sleep(retry_delay)
                     
                     # 不刷新页面，直接在原来的frame中重试
-                    # 保留frame引用，让重试时可以直接使用原来的frame查找滑块
                     if hasattr(self, '_detected_slider_frame'):
                         frame_info = "主页面" if self._detected_slider_frame is None else "Frame"
                         logger.info(f"【{self.pure_user_id}】保留frame引用，将在原来的{frame_info}中重试")
@@ -2257,32 +2378,62 @@ class XianyuSliderStealth:
                 slider_container, slider_button, slider_track = self.find_slider_elements(fast_mode=fast_mode)
                 if not all([slider_container, slider_button, slider_track]):
                     logger.error(f"【{self.pure_user_id}】滑块元素查找失败")
+                    if AI_LEARNING_ENABLED:
+                        record_slider_attempt(self.pure_user_id, False, 0, {}, current_strategy, 
+                                            (time.time() - start_time) * 1000, "滑块元素查找失败")
                     continue
                 
                 # 2. 计算滑动距离
                 slide_distance = self.calculate_slide_distance(slider_button, slider_track)
                 if slide_distance <= 0:
                     logger.error(f"【{self.pure_user_id}】滑动距离计算失败")
+                    if AI_LEARNING_ENABLED:
+                        record_slider_attempt(self.pure_user_id, False, 0, {}, current_strategy,
+                                            (time.time() - start_time) * 1000, "滑动距离计算失败")
                     continue
                 
-                # 3. 生成人类化轨迹
-                trajectory = self.generate_human_trajectory(slide_distance)
+                # 🧠 使用AI优化的参数生成轨迹
+                if AI_LEARNING_ENABLED:
+                    ai_learner = get_slider_learner(self.pure_user_id)
+                    optimal_params = ai_learner.get_optimal_parameters(slide_distance)
+                    logger.info(f"【{self.pure_user_id}】🧠 AI优化参数: 步数={optimal_params['step_count']}, "
+                              f"延迟={optimal_params['base_delay']:.3f}s, 模式={optimal_params['acceleration']}")
+                    # 使用AI参数生成轨迹
+                    trajectory = self.generate_human_trajectory_ai(slide_distance, optimal_params)
+                else:
+                    # 3. 生成人类化轨迹（传统方式）
+                    trajectory = self.generate_human_trajectory(slide_distance)
+                    
                 if not trajectory:
                     logger.error(f"【{self.pure_user_id}】轨迹生成失败")
+                    if AI_LEARNING_ENABLED:
+                        record_slider_attempt(self.pure_user_id, False, slide_distance, {}, current_strategy,
+                                            (time.time() - start_time) * 1000, "轨迹生成失败")
                     continue
                 
                 # 4. 模拟滑动
                 if not self.simulate_slide(slider_button, trajectory):
                     logger.error(f"【{self.pure_user_id}】滑动模拟失败")
+                    if AI_LEARNING_ENABLED:
+                        record_slider_attempt(self.pure_user_id, False, slide_distance, 
+                                            getattr(self, 'current_trajectory_data', {}), current_strategy,
+                                            (time.time() - start_time) * 1000, "滑动模拟失败")
                     continue
                 
                 # 5. 检查验证结果（极速模式）
                 if self.check_verification_success_fast(slider_button):
-                    logger.info(f"【{self.pure_user_id}】✅ 滑块验证成功! (第{attempt}次尝试)")
+                    duration_ms = (time.time() - start_time) * 1000
+                    logger.info(f"【{self.pure_user_id}】✅ 滑块验证成功! (第{attempt}次尝试, 耗时{duration_ms:.0f}ms)")
                     
                     # 📊 记录策略成功
                     strategy_stats.record_attempt(attempt, current_strategy, success=True)
                     logger.info(f"【{self.pure_user_id}】📊 记录策略: 第{attempt}次-{current_strategy}策略-成功")
+                    
+                    # 🧠 记录AI学习数据
+                    if AI_LEARNING_ENABLED and hasattr(self, 'current_trajectory_data'):
+                        record_slider_attempt(self.pure_user_id, True, slide_distance, 
+                                            self.current_trajectory_data, current_strategy, duration_ms)
+                        logger.info(f"【{self.pure_user_id}】🧠 AI学习: 已记录成功数据")
                     
                     # 保存成功记录用于学习
                     if self.enable_learning and hasattr(self, 'current_trajectory_data'):
@@ -2296,13 +2447,25 @@ class XianyuSliderStealth:
                     # 输出当前统计摘要
                     strategy_stats.log_summary()
                     
+                    # 🧠 输出AI学习报告
+                    if AI_LEARNING_ENABLED:
+                        ai_learner = get_slider_learner(self.pure_user_id)
+                        success_rate = ai_learner.get_success_rate(last_n=20)
+                        logger.info(f"【{self.pure_user_id}】🧠 AI学习成功率(最近20次): {success_rate:.1%}")
+                    
                     return True
                 else:
+                    duration_ms = (time.time() - start_time) * 1000
                     logger.warning(f"【{self.pure_user_id}】❌ 第{attempt}次验证失败")
                     
                     # 📊 记录策略失败
                     strategy_stats.record_attempt(attempt, current_strategy, success=False)
                     logger.info(f"【{self.pure_user_id}】📊 记录策略: 第{attempt}次-{current_strategy}策略-失败")
+                    
+                    # 🧠 记录AI学习数据
+                    if AI_LEARNING_ENABLED and hasattr(self, 'current_trajectory_data'):
+                        record_slider_attempt(self.pure_user_id, False, slide_distance,
+                                            self.current_trajectory_data, current_strategy, duration_ms, "验证失败")
                     
                     # 分析失败原因
                     if hasattr(self, 'current_trajectory_data'):
@@ -2314,7 +2477,11 @@ class XianyuSliderStealth:
                         continue
                 
             except Exception as e:
+                duration_ms = (time.time() - start_time) * 1000
                 logger.error(f"【{self.pure_user_id}】第{attempt}次处理滑块验证时出错: {str(e)}")
+                if AI_LEARNING_ENABLED:
+                    record_slider_attempt(self.pure_user_id, False, 0, {}, current_strategy,
+                                        duration_ms, f"异常: {str(e)[:50]}")
                 if attempt < max_retries:
                     continue
         

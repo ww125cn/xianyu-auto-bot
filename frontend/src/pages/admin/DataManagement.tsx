@@ -19,6 +19,63 @@ const tableOptions = [
   { value: 'risk_control_logs', label: '风控日志表' },
 ]
 
+// 列名中文映射
+const columnNameMap: Record<string, string> = {
+  // 通用列
+  'id': 'ID',
+  'created_at': '创建时间',
+  'updated_at': '更新时间',
+  // default_replies
+  'cookie_id': '账号ID',
+  'item_id': '商品ID',
+  'enabled': '启用',
+  'reply_content': '回复内容',
+  'reply_image_url': '回复图片',
+  'reply_once': '仅回复一次',
+  // keywords
+  'keyword': '关键词',
+  'reply': '回复',
+  'type': '类型',
+  'image_url': '图片URL',
+  'fuzzy_match': '模糊匹配',
+  // cookies
+  'value': 'Cookie值',
+  'remark': '备注',
+  'pause_duration': '暂停时间',
+  'username': '用户名',
+  'login_password': '登录密码',
+  'show_browser': '显示浏览器',
+  'user_id': '用户ID',
+  // cards
+  'card_id': '卡券ID',
+  'title': '标题',
+  'price': '价格',
+  'status': '状态',
+  // orders
+  'order_id': '订单ID',
+  'buyer_nick': '买家昵称',
+  'item_title': '商品标题',
+  'create_time': '创建时间',
+  'pay_time': '支付时间',
+  // notification_channels
+  'name': '名称',
+  'type': '类型',
+  'config': '配置',
+  // delivery_rules
+  'rule_name': '规则名称',
+  'conditions': '条件',
+  'action': '动作',
+  // risk_control_logs
+  'log_type': '日志类型',
+  'message': '消息',
+  'ip': 'IP地址',
+}
+
+// 获取列的中文显示名
+const getColumnDisplayName = (col: string) => {
+  return columnNameMap[col] || col
+}
+
 export function DataManagement() {
   const { addToast } = useUIStore()
   const { isAuthenticated, token, _hasHydrated } = useAuthStore()
@@ -157,7 +214,7 @@ export function DataManagement() {
                           index === 0 ? 'w-32' : 'min-w-[120px]'
                         }`}
                       >
-                        {col}
+                        {getColumnDisplayName(col)}
                       </th>
                     ))}
                   </tr>

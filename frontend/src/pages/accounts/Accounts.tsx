@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { Plus, RefreshCw, QrCode, Key, Edit2, Trash2, Power, PowerOff, X, Loader2, Clock, CheckCircle, MessageSquare, Bot, Eye, EyeOff, AlertTriangle, ShieldCheck, ShieldAlert, ShieldQuestion, RefreshCcw } from 'lucide-react'
-import { getAccountDetails, deleteAccount, updateAccountCookie, updateAccountStatus, updateAccountRemark, addAccount, generateQRLogin, checkQRLoginStatus, passwordLogin, updateAccountAutoConfirm, updateAccountPauseDuration, getAllAIReplySettings, getAIReplySettings, updateAIReplySettings, updateAccountLoginInfo, validateAccount, validateAllAccounts, type AIReplySettings } from '@/api/accounts'
+import { Plus, RefreshCw, QrCode, Key, Edit2, Trash2, Power, PowerOff, X, Loader2, Clock, CheckCircle, MessageSquare, Bot, Eye, EyeOff, AlertTriangle, ShieldCheck, ShieldAlert, ShieldQuestion, RefreshCcw, Sparkles } from 'lucide-react'
+import { getAccountDetails, deleteAccount, updateAccountCookie, updateAccountStatus, updateAccountRemark, addAccount, generateQRLogin, checkQRLoginStatus, passwordLogin, updateAccountAutoConfirm, updateAccountPauseDuration, getAllAIReplySettings, getAIReplySettings, updateAIReplySettings, updateAccountLoginInfo, validateAccount, validateAllAccounts, polishAllItems, getOnSaleItems, schedulePolish, cancelScheduledPolish, type AIReplySettings } from '@/api/accounts'
 import { getKeywords, getDefaultReply, updateDefaultReply } from '@/api/keywords'
 import { checkDefaultPassword } from '@/api/settings'
 import { useUIStore } from '@/store/uiStore'
@@ -79,6 +79,17 @@ export function Accounts() {
   const [validatingAccount, setValidatingAccount] = useState<string | null>(null)
   const [validatingAll, setValidatingAll] = useState(false)
 
+  // 擦亮功能状态
+  const [polishingAccount, setPolishingAccount] = useState<string | null>(null)
+  const [polishModalOpen, setPolishModalOpen] = useState(false)
+  const [polishModalAccount, setPolishModalAccount] = useState<AccountWithKeywordCount | null>(null)
+  const [onSaleItems, setOnSaleItems] = useState<Array<{item_id: string; title: string; price: string; image: string}>>([])
+  const [loadingItems, setLoadingItems] = useState(false)
+  const [polishResults, setPolishResults] = useState<Array<{item_id: string; success: boolean; message: string}> | null>(null)
+  const [scheduleHour, setScheduleHour] = useState(9)
+  const [scheduleMinute, setScheduleMinute] = useState(0)
+  const [scheduleRandomDelay, setScheduleRandomDelay] = useState(true)
+
   // 验证单个账号Cookie
   const handleValidateAccount = async (accountId: string) => {
     setValidatingAccount(accountId)
@@ -89,8 +100,15 @@ export function Accounts() {
           type: result.is_valid ? 'success' : 'warning',
           message: result.is_valid ? `Cookie有效: ${result.message}` : `Cookie无效: ${result.message}`
         })
-        // 刷新账号列表以更新状态
+        // 刷新账号列表以更新状态（包括Token状态）
         loadAccounts()
+        // 显示Token刷新提示
+        if (result.is_valid) {
+          addToast({
+            type: 'info',
+            message: '正在刷新Token状态...'
+          })
+        }
       } else {
         addToast({ type: 'error', message: result.message || '验证失败' })
       }
@@ -113,8 +131,13 @@ export function Accounts() {
           type: 'success',
           message: `验证完成: ${validCount}个有效, ${invalidCount}个无效`
         })
-        // 刷新账号列表以更新状态
+        // 刷新账号列表以更新状态（包括Token状态）
         loadAccounts()
+        // 显示Token刷新提示
+        addToast({
+          type: 'info',
+          message: '正在刷新所有账号的Token状态...'
+        })
       } else {
         addToast({ type: 'error', message: result.message || '批量验证失败' })
       }
@@ -122,6 +145,100 @@ export function Accounts() {
       addToast({ type: 'error', message: '批量验证请求失败' })
     } finally {
       setValidatingAll(false)
+    }
+  }
+
+  // ==================== 擦亮功能处理函数 ====================
+  
+  // 打开擦亮弹窗
+  const openPolishModal = async (account: AccountWithKeywordCount) => {
+    setPolishModalAccount(account)
+    setPolishModalOpen(true)
+    setPolishResults(null)
+    setLoadingItems(true)
+    
+    try {
+      const result = await getOnSaleItems(account.id)
+      if (result.success) {
+        setOnSaleItems(result.items)
+      } else {
+        addToast({ type: 'error', message: '获取在售商品失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '获取在售商品请求失败' })
+    } finally {
+      setLoadingItems(false)
+    }
+  }
+  
+  // 关闭擦亮弹窗
+  const closePolishModal = () => {
+    setPolishModalOpen(false)
+    setPolishModalAccount(null)
+    setOnSaleItems([])
+    setPolishResults(null)
+  }
+  
+  // 执行一键擦亮
+  const handlePolishItems = async () => {
+    if (!polishModalAccount) return
+    
+    setPolishingAccount(polishModalAccount.id)
+    try {
+      const result = await polishAllItems(polishModalAccount.id)
+      if (result.success) {
+        setPolishResults(result.results)
+        addToast({
+          type: result.success_count > 0 ? 'success' : 'warning',
+          message: `擦亮完成: ${result.success_count}/${result.total_count} 个成功`
+        })
+      } else {
+        addToast({ type: 'error', message: result.message || '擦亮失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '擦亮请求失败' })
+    } finally {
+      setPolishingAccount(null)
+    }
+  }
+  
+  // 设置定时擦亮
+  const handleSchedulePolish = async () => {
+    if (!polishModalAccount) return
+    
+    try {
+      const result = await schedulePolish(
+        polishModalAccount.id,
+        scheduleHour,
+        scheduleMinute,
+        scheduleRandomDelay
+      )
+      if (result.success) {
+        addToast({
+          type: 'success',
+          message: `已设置每日 ${String(scheduleHour).padStart(2, '0')}:${String(scheduleMinute).padStart(2, '0')} 定时擦亮`
+        })
+      } else {
+        addToast({ type: 'error', message: result.message || '设置失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '设置请求失败' })
+    }
+  }
+  
+  // 取消定时擦亮
+  const handleCancelSchedulePolish = async () => {
+    if (!polishModalAccount) return
+    
+    try {
+      const result = await cancelScheduledPolish(polishModalAccount.id)
+      if (result.success) {
+        addToast({ type: 'success', message: '已取消定时擦亮' })
+      } else {
+        addToast({ type: 'warning', message: result.message || '没有设置定时擦亮' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '取消请求失败' })
     }
   }
 
@@ -732,6 +849,7 @@ export function Accounts() {
                 <th>关键词</th>
                 <th>状态</th>
                 <th>Cookie状态</th>
+                <th>Token状态</th>
                 <th>AI回复</th>
                 <th>自动确认</th>
                 <th>暂停时间</th>
@@ -790,6 +908,49 @@ export function Accounts() {
                       })()}
                     </td>
                     <td>
+                      {(() => {
+                        // 如果账号未启用，显示禁用状态
+                        if (account.enabled === false) {
+                          return (
+                            <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-400">
+                              <PowerOff className="w-3.5 h-3.5" />
+                              账号禁用
+                            </span>
+                          )
+                        }
+                        // 如果token_status为null/undefined，显示未检查
+                        if (account.token_status === null || account.token_status === undefined) {
+                          return (
+                            <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-slate-100 dark:bg-slate-700 text-slate-400">
+                              <ShieldQuestion className="w-3.5 h-3.5" />
+                              未检查
+                            </span>
+                          )
+                        }
+                        // Token有效
+                        if (account.token_status) {
+                          return (
+                            <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-600">
+                              <CheckCircle className="w-3.5 h-3.5" />
+                              {account.token_message || '有效'}
+                            </span>
+                          )
+                        }
+                        // Token无效，根据消息显示不同图标
+                        const isNotRunning = account.token_message?.includes('未运行')
+                        return (
+                          <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium ${
+                            isNotRunning 
+                              ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-600' 
+                              : 'bg-red-100 dark:bg-red-900/30 text-red-600'
+                          }`}>
+                            {isNotRunning ? <Power className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+                            {account.token_message || '无效'}
+                          </span>
+                        )
+                      })()}
+                    </td>
+                    <td>
                       <button
                         onClick={() => handleToggleAI(account)}
                         className={`inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium transition-colors ${
@@ -816,6 +977,19 @@ export function Accounts() {
                     </td>
                     <td>
                       <div className="flex items-center gap-1 flex-wrap">
+                        <button
+                          onClick={() => openPolishModal(account)}
+                          disabled={polishingAccount === account.id}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded hover:bg-yellow-50 dark:hover:bg-yellow-900/30 transition-colors"
+                          title="一键擦亮"
+                        >
+                          {polishingAccount === account.id ? (
+                            <Loader2 className="w-3.5 h-3.5 text-yellow-500 animate-spin" />
+                          ) : (
+                            <Sparkles className="w-3.5 h-3.5 text-yellow-500" />
+                          )}
+                          <span className="text-yellow-600 dark:text-yellow-400">擦亮</span>
+                        </button>
                         <button
                           onClick={() => openAISettings(account)}
                           className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded hover:bg-purple-50 dark:hover:bg-purple-900/30 transition-colors"
@@ -1440,6 +1614,164 @@ export function Accounts() {
                   '保存'
                 )}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 擦亮功能弹窗 */}
+      {polishModalOpen && polishModalAccount && (
+        <div className="modal-overlay">
+          <div className="modal-content max-w-lg">
+            <div className="modal-header">
+              <h2 className="modal-title flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-yellow-500" />
+                一键擦亮商品
+              </h2>
+              <button onClick={closePolishModal} className="modal-close">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="modal-body space-y-4">
+              <div className="input-group">
+                <label className="input-label">账号</label>
+                <input
+                  type="text"
+                  value={polishModalAccount.id}
+                  disabled
+                  className="input-ios bg-slate-100 dark:bg-slate-700"
+                />
+              </div>
+
+              {/* 在售商品列表 */}
+              <div className="border-t border-slate-200 dark:border-slate-700 pt-4">
+                <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
+                  在售商品 ({onSaleItems.length})
+                </h3>
+                {loadingItems ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="w-6 h-6 animate-spin text-blue-500" />
+                  </div>
+                ) : onSaleItems.length === 0 ? (
+                  <p className="text-sm text-slate-500 dark:text-slate-400 text-center py-4">
+                    暂无在售商品
+                  </p>
+                ) : (
+                  <div className="max-h-48 overflow-y-auto space-y-2">
+                    {onSaleItems.map((item) => (
+                      <div
+                        key={item.item_id}
+                        className="flex items-center gap-3 p-2 rounded-lg bg-slate-50 dark:bg-slate-800"
+                      >
+                        {item.image && (
+                          <img
+                            src={item.image}
+                            alt={item.title}
+                            className="w-12 h-12 rounded object-cover flex-shrink-0"
+                          />
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-slate-700 dark:text-slate-300 truncate">
+                            {item.title}
+                          </p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">
+                            ¥{item.price}
+                          </p>
+                        </div>
+                        {polishResults && (
+                          (() => {
+                            const result = polishResults.find(r => r.item_id === item.item_id)
+                            if (!result) return null
+                            return result.success ? (
+                              <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0" />
+                            ) : (
+                              <span title={result.message}><AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0" /></span>
+                            )
+                          })()
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* 定时擦亮设置 */}
+              {!polishResults && (
+                <div className="border-t border-slate-200 dark:border-slate-700 pt-4">
+                  <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
+                    定时擦亮设置
+                  </h3>
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        value={scheduleHour}
+                        onChange={(e) => setScheduleHour(Math.min(23, Math.max(0, parseInt(e.target.value) || 0)))}
+                        className="input-ios w-16 text-center"
+                        min="0"
+                        max="23"
+                      />
+                      <span className="text-slate-500">:</span>
+                      <input
+                        type="number"
+                        value={scheduleMinute}
+                        onChange={(e) => setScheduleMinute(Math.min(59, Math.max(0, parseInt(e.target.value) || 0)))}
+                        className="input-ios w-16 text-center"
+                        min="0"
+                        max="59"
+                      />
+                    </div>
+                    <button
+                      onClick={handleSchedulePolish}
+                      className="btn-ios-secondary text-xs"
+                    >
+                      设置定时
+                    </button>
+                    <button
+                      onClick={handleCancelSchedulePolish}
+                      className="btn-ios-secondary text-xs"
+                    >
+                      取消定时
+                    </button>
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={scheduleRandomDelay}
+                      onChange={(e) => setScheduleRandomDelay(e.target.checked)}
+                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-slate-700 dark:text-slate-300">添加随机延迟（0-30分钟）</span>
+                  </label>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    设置每日定时自动擦亮所有在售商品
+                  </p>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button type="button" onClick={closePolishModal} className="btn-ios-secondary">
+                {polishResults ? '关闭' : '取消'}
+              </button>
+              {!polishResults && (
+                <button
+                  onClick={handlePolishItems}
+                  className="btn-ios-primary"
+                  disabled={polishingAccount === polishModalAccount.id || onSaleItems.length === 0}
+                >
+                  {polishingAccount === polishModalAccount.id ? (
+                    <span className="flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      擦亮中...
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4" />
+                      一键擦亮
+                    </span>
+                  )}
+                </button>
+              )}
             </div>
           </div>
         </div>

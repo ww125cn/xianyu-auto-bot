@@ -712,6 +712,14 @@ class XianyuLive:
         self.captcha_verification_count = 0  # 滑块验证次数计数器
         self.max_captcha_verification_count = 3  # 最大滑块验证次数，防止无限递归
 
+        # Token刷新失败计数器
+        self.token_refresh_fail_count = 0  # Token刷新连续失败次数
+        self.max_token_refresh_fail_count = 6  # 最大Token刷新失败次数，超过则停止任务
+        self.token_refresh_fail_reset_interval = 3600  # 失败计数重置间隔（1小时），成功后重置
+
+        # 实例运行状态
+        self._running = True  # 实例运行状态标志，用于控制任务停止
+
         # WebSocket连接监控
         self.connection_state = ConnectionState.DISCONNECTED  # 连接状态
         self.connection_failures = 0  # 连续连接失败次数
@@ -1497,6 +1505,11 @@ class XianyuLive:
                                 self.last_message_received_time = 0
                                 logger.warning(f"【{self.cookie_id}】Token刷新成功，已重置消息接收时间标识")
 
+                                # 【重置失败计数】Token刷新成功，重置连续失败计数
+                                if self.token_refresh_fail_count > 0:
+                                    logger.info(f"【{self.cookie_id}】Token刷新成功，重置连续失败计数（之前: {self.token_refresh_fail_count}次）")
+                                    self.token_refresh_fail_count = 0
+
                                 logger.info(f"【{self.cookie_id}】Token刷新成功")
                                 # 标记为成功
                                 self.last_token_refresh_status = "success"
@@ -1836,6 +1849,20 @@ class XianyuLive:
                             "captcha_success_db_update_failed"
                         )
 
+                    # 【关键】滑块验证成功后，触发完整的Cookie刷新
+                    # 因为滑块验证只更新了x5sec，但核心的_m_h5_tk可能仍然过期
+                    logger.info(f"【{self.cookie_id}】滑块验证成功，准备触发完整的Cookie刷新...")
+                    try:
+                        # 调用浏览器刷新Cookie（不设置triggered_by_refresh_token标志，避免重复重启）
+                        browser_refresh_success = await self._refresh_cookies_via_browser(triggered_by_refresh_token=False)
+                        if browser_refresh_success:
+                            logger.info(f"【{self.cookie_id}】✅ 滑块验证后Cookie刷新成功")
+                        else:
+                            logger.warning(f"【{self.cookie_id}】⚠️ 滑块验证后Cookie刷新失败，但滑块验证已更新x5sec")
+                    except Exception as refresh_e:
+                        logger.error(f"【{self.cookie_id}】滑块验证后Cookie刷新异常: {self._safe_str(refresh_e)}")
+                        # 即使刷新失败，也返回cookies_str，因为x5sec已经更新
+                    
                     return cookies_str
                 else:
                     logger.error(f"【{self.cookie_id}】滑块验证失败")
@@ -5070,6 +5097,17 @@ class XianyuLive:
                         logger.info(f"【{self.cookie_id}】账号已禁用，停止Token刷新循环")
                         break
 
+                    # 【检查Token刷新失败次数】超过最大次数则停止所有任务
+                    if self.token_refresh_fail_count >= self.max_token_refresh_fail_count:
+                        logger.error(f"【{self.cookie_id}】🚨 Token刷新连续失败{self.token_refresh_fail_count}次，达到上限({self.max_token_refresh_fail_count})，停止所有任务防止账号被封！")
+                        await self.send_token_refresh_notification(
+                            f"Token刷新连续失败{self.token_refresh_fail_count}次，已自动停止所有任务",
+                            "token_refresh_max_failures_reached"
+                        )
+                        # 停止该账号的所有任务
+                        await self.stop_all_tasks("Token刷新连续失败达到上限")
+                        break
+
                     current_time = time.time()
                     if current_time - self.last_token_refresh_time >= self.token_refresh_interval:
                         logger.info("Token即将过期，准备刷新...")
@@ -5095,6 +5133,11 @@ class XianyuLive:
                             logger.info(f"【{self.cookie_id}】Token刷新完成，WebSocket将使用新Token重新连接")
                             break
                         else:
+                            # 【增加失败计数】Token刷新失败
+                            if getattr(self, 'last_token_refresh_status', None) not in ("skipped_cooldown", "restarted_after_cookie_refresh"):
+                                self.token_refresh_fail_count += 1
+                                logger.warning(f"【{self.cookie_id}】Token刷新失败，连续失败次数: {self.token_refresh_fail_count}/{self.max_token_refresh_fail_count}")
+
                             # 根据上一次刷新状态决定日志级别（冷却/已重启为正常情况）
                             if getattr(self, 'last_token_refresh_status', None) in ("skipped_cooldown", "restarted_after_cookie_refresh"):
                                 logger.info(f"【{self.cookie_id}】Token刷新未执行或已重启（正常），将在{self.token_retry_interval // 60}分钟后重试")
@@ -6897,6 +6940,69 @@ class XianyuLive:
         if self.session:
             await self.session.close()
             self.session = None
+
+    async def stop_all_tasks(self, reason: str = ""):
+        """停止该账号的所有任务
+        
+        Args:
+            reason: 停止原因，用于日志记录
+        """
+        logger.warning(f"【{self.cookie_id}】🛑 正在停止所有任务..." + (f" 原因: {reason}" if reason else ""))
+        
+        # 1. 标记实例为停止状态
+        self._running = False
+        
+        # 2. 关闭WebSocket连接
+        if self.ws and not self.ws.closed:
+            try:
+                await self.ws.close()
+                logger.info(f"【{self.cookie_id}】WebSocket连接已关闭")
+            except Exception as e:
+                logger.warning(f"【{self.cookie_id}】关闭WebSocket时出错: {self._safe_str(e)}")
+        
+        # 3. 取消所有后台任务
+        tasks_to_cancel = []
+        
+        if self.heartbeat_task and not self.heartbeat_task.done():
+            tasks_to_cancel.append(("心跳任务", self.heartbeat_task))
+        if self.token_refresh_task and not self.token_refresh_task.done():
+            tasks_to_cancel.append(("Token刷新任务", self.token_refresh_task))
+        if self.cleanup_task and not self.cleanup_task.done():
+            tasks_to_cancel.append(("清理任务", self.cleanup_task))
+        if self.cookie_refresh_task and not self.cookie_refresh_task.done():
+            tasks_to_cancel.append(("Cookie刷新任务", self.cookie_refresh_task))
+        
+        for task_name, task in tasks_to_cancel:
+            try:
+                task.cancel()
+                logger.info(f"【{self.cookie_id}】已发送取消信号给{task_name}")
+            except Exception as e:
+                logger.warning(f"【{self.cookie_id}】取消{task_name}时出错: {self._safe_str(e)}")
+        
+        # 4. 关闭aiohttp session
+        await self.close_session()
+        
+        # 5. 更新数据库中的账号状态为禁用
+        try:
+            from db_manager import db_manager
+            db_manager.update_cookie_status(self.cookie_id, False)
+            logger.warning(f"【{self.cookie_id}】已自动禁用账号（数据库状态更新）")
+        except Exception as e:
+            logger.error(f"【{self.cookie_id}】更新数据库状态失败: {self._safe_str(e)}")
+        
+        # 6. 从实例字典中移除
+        try:
+            async with XianyuLive._instances_lock:
+                if self.cookie_id in XianyuLive._instances:
+                    del XianyuLive._instances[self.cookie_id]
+                    logger.info(f"【{self.cookie_id}】已从实例字典中移除")
+        except Exception as e:
+            logger.warning(f"【{self.cookie_id}】从实例字典移除时出错: {self._safe_str(e)}")
+        
+        # 7. 设置连接状态为失败
+        self._set_connection_state(ConnectionState.FAILED, f"所有任务已停止: {reason}" if reason else "所有任务已停止")
+        
+        logger.error(f"【{self.cookie_id}】✅ 所有任务已停止，账号已自动禁用保护")
 
     async def get_api_reply(self, msg_time, user_url, send_user_id, send_user_name, item_id, send_message, chat_id):
         """调用API获取回复消息"""

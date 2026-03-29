@@ -17,6 +17,7 @@ class CookieManager:
         self.keywords: Dict[str, List[Tuple[str, str]]] = {}
         self.cookie_status: Dict[str, bool] = {}  # 账号启用状态
         self.auto_confirm_settings: Dict[str, bool] = {}  # 自动确认发货设置
+        self.live_instances: Dict[str, Any] = {}  # 保存XianyuLive实例引用
         self._task_locks: Dict[str, asyncio.Lock] = {}  # 每个cookie_id的任务锁，防止重复创建
         self._load_from_db()
 
@@ -71,6 +72,10 @@ class CookieManager:
             live = XianyuLive(cookie_value, cookie_id=cookie_id, user_id=user_id)
             logger.info(f"【{cookie_id}】XianyuLive实例创建成功，开始调用main()...")
             
+            # 保存live实例引用
+            self.live_instances[cookie_id] = live
+            logger.info(f"【{cookie_id}】XianyuLive实例已保存到live_instances")
+            
             # 强制刷新日志，确保日志被写入
             try:
                 import sys
@@ -101,6 +106,10 @@ class CookieManager:
             except:
                 pass
         finally:
+            # 清理live实例引用
+            if cookie_id in self.live_instances:
+                del self.live_instances[cookie_id]
+                logger.info(f"【{cookie_id}】XianyuLive实例已从live_instances移除")
             logger.info(f"【{cookie_id}】_run_xianyu方法执行结束")
             # 确保日志被刷新
             try:
@@ -329,6 +338,10 @@ class CookieManager:
         """获取所有启用的Cookie"""
         return {cid: value for cid, value in self.cookies.items()
                 if self.cookie_status.get(cid, True)}
+    
+    def get_live_instance(self, cookie_id: str) -> Optional[Any]:
+        """获取指定Cookie的XianyuLive实例"""
+        return self.live_instances.get(cookie_id)
 
     def _start_cookie_task(self, cookie_id: str):
         """启动指定Cookie的任务"""

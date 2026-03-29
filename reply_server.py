@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, F
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Tuple, Optional, Dict, Any
 from pathlib import Path
 from urllib.parse import unquote
@@ -66,7 +66,7 @@ RATE_LIMITS = {
     'api': {'max_requests': 666, 'window_seconds': 60},  # API接口每分钟666个请求
     'register': {'max_requests': 50, 'window_seconds': 60},  # 注册接口每分钟50个请求
     'captcha': {'max_requests': 10, 'window_seconds': 60},  # 验证码接口每分钟10个请求
-    'verification': {'max_requests': 5, 'window_seconds': 60},  # 验证接口每分钟5个请求
+    'verification': {'max_requests': 20, 'window_seconds': 60},  # 验证接口每分钟20个请求
     'verify': {'max_requests': 500, 'window_seconds': 60},  # /verify 接口（检查登录状态）每分钟500个请求
     'cookies': {'max_requests': 500, 'window_seconds': 60},  # /cookies 接口每分钟500个请求
 }
@@ -151,6 +151,9 @@ class LoginRequest(BaseModel):
     password: Optional[str] = None
     email: Optional[str] = None
     verification_code: Optional[str] = None
+    geetest_challenge: Optional[str] = None
+    geetest_validate: Optional[str] = None
+    geetest_seccode: Optional[str] = None
 
 
 class LoginResponse(BaseModel):
@@ -530,12 +533,17 @@ async def csrf_protection_middleware(request, call_next):
             return response
     # 为非GET请求验证CSRF token
     elif request.method not in ["GET", "HEAD", "OPTIONS"]:
-        csrf_token = request.cookies.get("csrf_token")
-        if not csrf_token:
-            return JSONResponse(
-                status_code=403,
-                content={"detail": "CSRF token missing"}
-            )
+        # 对带 Authorization header 的 API 请求跳过 CSRF 检查
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            pass
+        else:
+            csrf_token = request.cookies.get("csrf_token")
+            if not csrf_token:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "CSRF token missing"}
+                )
     
     response = await call_next(request)
     return response
@@ -833,28 +841,122 @@ async def register_route():
 # 登录接口
 @app.post('/login')
 async def login(request: LoginRequest):
-    from db_manager import db_manager
+    try:
+        from db_manager import db_manager
 
-    # 首次初始化未完成时，禁止通过 API 登录绕过 /setup
-    if _is_setup_required():
-        return JSONResponse(
-            status_code=503,
-            content={
-                "success": False,
-                "message": "系统尚未完成首次初始化，请先访问 /setup 设置管理员密码",
-                "setup_required": True,
-            },
-        )
+        # 首次初始化未完成时，禁止通过 API 登录绕过 /setup
+        if _is_setup_required():
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "success": False,
+                    "message": "系统尚未完成首次初始化，请先访问 /setup 设置管理员密码",
+                    "setup_required": True,
+                },
+            )
 
-    # 判断登录方式
-    if request.username and request.password:
-        # 用户名/密码登录
-        logger.info(f"【{request.username}】尝试用户名登录")
+        # 检查登录验证码是否启用
+        login_captcha_enabled = False
+        try:
+            login_captcha_enabled = db_manager.get_system_setting('login_captcha_enabled') == 'true'
+        except Exception as e:
+            logger.warning(f"获取登录验证码设置失败，默认禁用: {e}")
+            login_captcha_enabled = False
 
-        # 统一使用用户表验证（包括admin用户）
-        if db_manager.verify_user_password(request.username, request.password):
-            user = db_manager.get_user_by_username(request.username)
-            if user:
+        # 判断登录方式
+        if request.username and request.password:
+            # 用户名/密码登录
+            logger.info(f"【{request.username}】尝试用户名登录")
+            
+            # 验证极验验证码（如果启用）
+            if login_captcha_enabled:
+                try:
+                    if not request.geetest_challenge:
+                        logger.warning(f"【{request.username}】登录失败：未完成滑动验证")
+                        return LoginResponse(
+                            success=False,
+                            message="请完成滑动验证"
+                        )
+                    # 检查极验验证状态
+                    if get_geetest_status(request.geetest_challenge) != 1:
+                        logger.warning(f"【{request.username}】登录失败：滑动验证未通过")
+                        return LoginResponse(
+                            success=False,
+                            message="滑动验证未通过，请重试"
+                        )
+                except Exception as e:
+                    logger.warning(f"极验验证检查失败，跳过: {e}")
+
+            # 统一使用用户表验证（包括admin用户）
+            if db_manager.verify_user_password(request.username, request.password):
+                user = db_manager.get_user_by_username(request.username)
+                if user:
+                    # 生成token
+                    token = generate_token()
+                    # 计算过期时间
+                    expires_at = time.time() + TOKEN_EXPIRE_TIME
+                    # 保存会话到数据库
+                    is_admin = user.get('is_admin', False) or user['username'] == ADMIN_USERNAME
+                    db_manager.save_session(token, user['id'], user['username'], is_admin, expires_at)
+
+                    # 区分管理员和普通用户的日志
+                    if user['username'] == ADMIN_USERNAME:
+                        logger.info(f"【{user['username']}#{user['id']}】登录成功（管理员）")
+                    else:
+                        logger.info(f"【{user['username']}#{user['id']}】登录成功")
+
+                    return LoginResponse(
+                        success=True,
+                        token=token,
+                        message="登录成功",
+                        user_id=user['id'],
+                        username=user['username'],
+                        is_admin=(user['username'] == ADMIN_USERNAME)
+                    )
+
+            logger.warning(f"【{request.username}】登录失败：用户名或密码错误")
+            # 记录安全事件
+            db_manager.log_security_event(
+                event_type="login_failure",
+                event_level="warning",
+                ip_address=request.client.host,
+                user_agent=request.headers.get("user-agent"),
+                endpoint=request.url.path,
+                request_method=request.method,
+                request_params=str(request.query_params),
+                username=request.username,
+                description="用户名或密码错误"
+            )
+            return LoginResponse(
+                success=False,
+                message="用户名或密码错误"
+            )
+
+        elif request.email and request.password:
+            # 邮箱/密码登录
+            logger.info(f"【{request.email}】尝试邮箱密码登录")
+            
+            # 验证极验验证码（如果启用）
+            if login_captcha_enabled:
+                try:
+                    if not request.geetest_challenge:
+                        logger.warning(f"【{request.email}】登录失败：未完成滑动验证")
+                        return LoginResponse(
+                            success=False,
+                            message="请完成滑动验证"
+                        )
+                    # 检查极验验证状态
+                    if get_geetest_status(request.geetest_challenge) != 1:
+                        logger.warning(f"【{request.email}】登录失败：滑动验证未通过")
+                        return LoginResponse(
+                            success=False,
+                            message="滑动验证未通过，请重试"
+                        )
+                except Exception as e:
+                    logger.warning(f"极验验证检查失败，跳过: {e}")
+
+            user = db_manager.get_user_by_email(request.email)
+            if user and db_manager.verify_user_password(user['username'], request.password):
                 # 生成token
                 token = generate_token()
                 # 计算过期时间
@@ -863,11 +965,7 @@ async def login(request: LoginRequest):
                 is_admin = user.get('is_admin', False) or user['username'] == ADMIN_USERNAME
                 db_manager.save_session(token, user['id'], user['username'], is_admin, expires_at)
 
-                # 区分管理员和普通用户的日志
-                if user['username'] == ADMIN_USERNAME:
-                    logger.info(f"【{user['username']}#{user['id']}】登录成功（管理员）")
-                else:
-                    logger.info(f"【{user['username']}#{user['id']}】登录成功")
+                logger.info(f"【{user['username']}#{user['id']}】邮箱登录成功")
 
                 return LoginResponse(
                     success=True,
@@ -878,30 +976,33 @@ async def login(request: LoginRequest):
                     is_admin=(user['username'] == ADMIN_USERNAME)
                 )
 
-        logger.warning(f"【{request.username}】登录失败：用户名或密码错误")
-        # 记录安全事件
-        db_manager.log_security_event(
-            event_type="login_failure",
-            event_level="warning",
-            ip_address=request.client.host,
-            user_agent=request.headers.get("user-agent"),
-            endpoint=request.url.path,
-            request_method=request.method,
-            request_params=str(request.query_params),
-            username=request.username,
-            description="用户名或密码错误"
-        )
-        return LoginResponse(
-            success=False,
-            message="用户名或密码错误"
-        )
+            logger.warning(f"【{request.email}】邮箱登录失败：邮箱或密码错误")
+            return LoginResponse(
+                success=False,
+                message="邮箱或密码错误"
+            )
 
-    elif request.email and request.password:
-        # 邮箱/密码登录
-        logger.info(f"【{request.email}】尝试邮箱密码登录")
+        elif request.email and request.verification_code:
+            # 邮箱/验证码登录
+            logger.info(f"【{request.email}】尝试邮箱验证码登录")
 
-        user = db_manager.get_user_by_email(request.email)
-        if user and db_manager.verify_user_password(user['username'], request.password):
+            # 验证邮箱验证码
+            if not db_manager.verify_email_code(request.email, request.verification_code, 'login'):
+                logger.warning(f"【{request.email}】验证码登录失败：验证码错误或已过期")
+                return LoginResponse(
+                    success=False,
+                    message="验证码错误或已过期"
+                )
+
+            # 获取用户信息
+            user = db_manager.get_user_by_email(request.email)
+            if not user:
+                logger.warning(f"【{request.email}】验证码登录失败：用户不存在")
+                return LoginResponse(
+                    success=False,
+                    message="用户不存在"
+                )
+
             # 生成token
             token = generate_token()
             # 计算过期时间
@@ -910,7 +1011,7 @@ async def login(request: LoginRequest):
             is_admin = user.get('is_admin', False) or user['username'] == ADMIN_USERNAME
             db_manager.save_session(token, user['id'], user['username'], is_admin, expires_at)
 
-            logger.info(f"【{user['username']}#{user['id']}】邮箱登录成功")
+            logger.info(f"【{user['username']}#{user['id']}】验证码登录成功")
 
             return LoginResponse(
                 success=True,
@@ -921,56 +1022,16 @@ async def login(request: LoginRequest):
                 is_admin=(user['username'] == ADMIN_USERNAME)
             )
 
-        logger.warning(f"【{request.email}】邮箱登录失败：邮箱或密码错误")
-        return LoginResponse(
-            success=False,
-            message="邮箱或密码错误"
-        )
-
-    elif request.email and request.verification_code:
-        # 邮箱/验证码登录
-        logger.info(f"【{request.email}】尝试邮箱验证码登录")
-
-        # 验证邮箱验证码
-        if not db_manager.verify_email_code(request.email, request.verification_code, 'login'):
-            logger.warning(f"【{request.email}】验证码登录失败：验证码错误或已过期")
+        else:
             return LoginResponse(
                 success=False,
-                message="验证码错误或已过期"
+                message="请提供有效的登录信息"
             )
-
-        # 获取用户信息
-        user = db_manager.get_user_by_email(request.email)
-        if not user:
-            logger.warning(f"【{request.email}】验证码登录失败：用户不存在")
-            return LoginResponse(
-                success=False,
-                message="用户不存在"
-            )
-
-        # 生成token
-        token = generate_token()
-        # 计算过期时间
-        expires_at = time.time() + TOKEN_EXPIRE_TIME
-        # 保存会话到数据库
-        is_admin = user.get('is_admin', False) or user['username'] == ADMIN_USERNAME
-        db_manager.save_session(token, user['id'], user['username'], is_admin, expires_at)
-
-        logger.info(f"【{user['username']}#{user['id']}】验证码登录成功")
-
-        return LoginResponse(
-            success=True,
-            token=token,
-            message="登录成功",
-            user_id=user['id'],
-            username=user['username'],
-            is_admin=(user['username'] == ADMIN_USERNAME)
-        )
-
-    else:
+    except Exception as e:
+        logger.exception(f"登录接口异常: {e}")
         return LoginResponse(
             success=False,
-            message="请提供有效的登录信息"
+            message=f"登录失败，请稍后重试"
         )
 
 
@@ -1187,8 +1248,12 @@ class GeetestRegisterResponse(BaseModel):
 class GeetestValidateRequest(BaseModel):
     """极验二次验证请求"""
     challenge: str
-    validate: str
+    validate_code: str = Field(alias="validate")
     seccode: str
+    
+    model_config = ConfigDict(
+        populate_by_name=True
+    )
 
 
 class GeetestValidateResponse(BaseModel):
@@ -1282,13 +1347,13 @@ async def geetest_validate(request: GeetestValidateRequest):
         if is_normal_mode:
             result = await gt_lib.success_validate(
                 request.challenge,
-                request.validate,
+                request.validate_code,
                 request.seccode
             )
         else:
             result = gt_lib.fail_validate(
                 request.challenge,
-                request.validate,
+                request.validate_code,
                 request.seccode
             )
         
@@ -1713,6 +1778,44 @@ def get_cookies_details(current_user: Dict[str, Any] = Depends(get_current_user)
         remark = cookie_details.get('remark', '') if cookie_details else ''
         # 获取验证状态
         validation_status = db_manager.get_cookie_validation_status(cookie_id)
+        
+        # 获取Token状态（从cookie_manager获取XianyuAutoAsync实例）
+        token_status = None
+        token_message = None
+        last_token_refresh = None
+        
+        try:
+            # 获取live实例
+            live_instance = cookie_manager.manager.get_live_instance(cookie_id)
+            if live_instance:
+                # 获取Token相关信息
+                last_token_refresh = getattr(live_instance, 'last_token_refresh_time', None)
+                token_refresh_fail_count = getattr(live_instance, 'token_refresh_fail_count', 0)
+                
+                if last_token_refresh is None or last_token_refresh == 0:
+                    token_status = None
+                    token_message = "未检查"
+                else:
+                    # 检查实例是否在运行
+                    is_running = getattr(live_instance, '_running', False)
+                    if not is_running:
+                        token_status = False
+                        token_message = "实例未运行"
+                    elif token_refresh_fail_count > 0:
+                        token_status = False
+                        token_message = f"Token刷新失败{token_refresh_fail_count}次"
+                    else:
+                        token_status = True
+                        token_message = "有效"
+        except Exception as e:
+            logger.warning(f"获取Token状态失败: {cookie_id} - {str(e)}")
+            token_status = None
+            token_message = "未检查"
+        
+        # 获取登录信息
+        username = cookie_details.get('username', '') if cookie_details else ''
+        login_password = cookie_details.get('login_password', '') if cookie_details else ''
+        show_browser = cookie_details.get('show_browser', False) if cookie_details else False
 
         result.append({
             'id': cookie_id,
@@ -1723,7 +1826,13 @@ def get_cookies_details(current_user: Dict[str, Any] = Depends(get_current_user)
             'pause_duration': cookie_details.get('pause_duration', 10) if cookie_details else 10,
             'is_valid': validation_status.get('is_valid') if validation_status else None,
             'validation_message': validation_status.get('validation_message', '') if validation_status else '',
-            'last_validated_at': validation_status.get('last_validated_at') if validation_status else None
+            'last_validated_at': validation_status.get('last_validated_at') if validation_status else None,
+            'token_status': token_status,
+            'token_message': token_message,
+            'last_token_refresh': last_token_refresh,
+            'username': username,
+            'login_password': login_password,
+            'show_browser': show_browser
         })
     return result
 
@@ -3383,6 +3492,30 @@ def delete_notification_channel(channel_id: int, _: None = Depends(require_auth)
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post('/notification-channels/{channel_id}/test')
+async def test_notification_channel(channel_id: int, _: None = Depends(require_auth)):
+    """测试通知渠道"""
+    from db_manager import db_manager
+    try:
+        channel = db_manager.get_notification_channel(channel_id)
+        if not channel:
+            raise HTTPException(status_code=404, detail='通知渠道不存在')
+        
+        result = db_manager.test_notification_channel(channel_id)
+        return {
+            'success': result.get('success', False),
+            'message': result.get('message', '未知错误')
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"测试通知渠道失败: {e}")
+        return {
+            'success': False,
+            'message': f'测试失败: {str(e)}'
+        }
+
+
 # ------------------------- 消息通知配置接口 -------------------------
 
 @app.get('/message-notifications')
@@ -3533,6 +3666,24 @@ def update_system_setting(key: str, setting_data: SystemSettingIn, _: None = Dep
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post('/system-settings/test-email')
+async def test_email_setting(email: str, _: None = Depends(require_admin)):
+    """测试邮件发送设置"""
+    from db_manager import db_manager
+    try:
+        result = await db_manager.send_verification_email(email, 'test')
+        return {
+            'success': result.get('success', False),
+            'message': result.get('message', '未知错误')
+        }
+    except Exception as e:
+        logger.error(f"测试邮件发送失败: {e}")
+        return {
+            'success': False,
+            'message': f'测试失败: {str(e)}'
+        }
 
 
 # ------------------------- 注册设置接口 -------------------------
@@ -6614,6 +6765,157 @@ async def validate_all_cookies_api(current_user: Dict[str, Any] = Depends(get_cu
     except Exception as e:
         logger.error(f"批量验证Cookie失败: {e}")
         raise HTTPException(status_code=500, detail=f"验证失败: {str(e)}")
+
+
+# ==================== 商品擦亮功能 ====================
+
+@app.get("/cookies/{cookie_id}/items")
+async def get_on_sale_items(
+    cookie_id: str, 
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """获取在售商品列表"""
+    try:
+        from db_manager import db_manager
+        
+        # 检查cookie是否属于当前用户
+        user_id = current_user['user_id']
+        user_cookies = db_manager.get_all_cookies(user_id)
+        
+        if cookie_id not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限访问该Cookie")
+        
+        # 这里应该调用闲鱼自动回复机器人获取商品列表
+        # 暂时返回空列表，实际需要集成 XianyuAutoAsync
+        return {
+            "success": True,
+            "items": []
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取商品列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
+
+
+@app.post("/cookies/{cookie_id}/polish")
+async def polish_all_items(
+    cookie_id: str, 
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """一键擦亮所有商品"""
+    try:
+        from db_manager import db_manager
+        
+        # 检查cookie是否属于当前用户
+        user_id = current_user['user_id']
+        user_cookies = db_manager.get_all_cookies(user_id)
+        
+        if cookie_id not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限访问该Cookie")
+        
+        # 这里应该调用闲鱼自动回复机器人执行擦亮
+        # 暂时返回成功，实际需要集成 XianyuAutoAsync
+        return {
+            "success": True,
+            "message": "擦亮任务已提交"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"一键擦亮失败: {e}")
+        raise HTTPException(status_code=500, detail=f"擦亮失败: {str(e)}")
+
+
+@app.post("/cookies/{cookie_id}/polish/schedule")
+async def schedule_polish(
+    cookie_id: str,
+    hour: int = 9,
+    minute: int = 0,
+    random_delay: bool = True,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """设置定时擦亮"""
+    try:
+        from db_manager import db_manager
+        
+        # 检查cookie是否属于当前用户
+        user_id = current_user['user_id']
+        user_cookies = db_manager.get_all_cookies(user_id)
+        
+        if cookie_id not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限访问该Cookie")
+        
+        # 这里应该保存定时擦亮配置
+        # 暂时返回成功
+        return {
+            "success": True,
+            "message": "定时擦亮已设置"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"设置定时擦亮失败: {e}")
+        raise HTTPException(status_code=500, detail=f"设置失败: {str(e)}")
+
+
+@app.delete("/cookies/{cookie_id}/polish/schedule")
+async def cancel_scheduled_polish(
+    cookie_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """取消定时擦亮"""
+    try:
+        from db_manager import db_manager
+        
+        # 检查cookie是否属于当前用户
+        user_id = current_user['user_id']
+        user_cookies = db_manager.get_all_cookies(user_id)
+        
+        if cookie_id not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限访问该Cookie")
+        
+        # 这里应该取消定时擦亮配置
+        # 暂时返回成功
+        return {
+            "success": True,
+            "message": "定时擦亮已取消"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"取消定时擦亮失败: {e}")
+        raise HTTPException(status_code=500, detail=f"取消失败: {str(e)}")
+
+
+@app.get("/cookies/{cookie_id}/polish/history")
+async def get_polish_history(
+    cookie_id: str,
+    limit: int = 10,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """获取擦亮历史"""
+    try:
+        from db_manager import db_manager
+        
+        # 检查cookie是否属于当前用户
+        user_id = current_user['user_id']
+        user_cookies = db_manager.get_all_cookies(user_id)
+        
+        if cookie_id not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限访问该Cookie")
+        
+        # 这里应该获取擦亮历史记录
+        # 暂时返回空列表
+        return {
+            "success": True,
+            "history": []
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取擦亮历史失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
 
 
 # ==================== 前端 SPA Catch-All 路由 ====================

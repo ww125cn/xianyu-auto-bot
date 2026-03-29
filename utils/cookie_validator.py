@@ -252,7 +252,7 @@ class CookieValidator:
             logger.error(f"检查所有Cookie时出错: {e}")
     
     async def _check_and_update_cookie(self, cookie_id: str, cookie_value: str, use_delay: bool = True):
-        """检查并更新单个Cookie的状态"""
+        """检查并更新单个Cookie的状态，同时刷新Token"""
         try:
             is_valid, message = await self.validate_cookie(cookie_id, cookie_value, use_delay)
             
@@ -268,11 +268,55 @@ class CookieValidator:
             else:
                 logger.debug(f"Cookie {cookie_id} 有效: {message}")
             
+            # 尝试刷新Token（如果账号正在运行）
+            await self._refresh_token_for_cookie(cookie_id)
+            
             return is_valid, message
             
         except Exception as e:
             logger.error(f"检查Cookie {cookie_id} 时出错: {e}")
             return False, str(e)
+    
+    async def _refresh_token_for_cookie(self, cookie_id: str):
+        """
+        尝试刷新指定Cookie的Token
+        
+        如果该Cookie对应的XianyuLive实例正在运行，则调用其refresh_token方法
+        """
+        try:
+            # 尝试导入XianyuLive
+            try:
+                from XianyuAutoAsync import XianyuLive
+            except ImportError:
+                logger.info(f"无法导入XianyuLive，跳过Token刷新: {cookie_id}")
+                return
+            
+            # 获取实例
+            instance = XianyuLive.get_instance(cookie_id)
+            if not instance:
+                logger.info(f"账号 {cookie_id} 未运行，跳过Token刷新")
+                return
+            
+            # 检查是否需要刷新Token
+            import time
+            token_age = time.time() - instance.last_token_refresh_time
+            # 如果Token超过20小时，尝试刷新
+            if token_age > (20 * 3600):
+                logger.info(f"账号 {cookie_id} Token已过期{token_age/3600:.1f}小时，尝试刷新...")
+                try:
+                    # 调用refresh_token方法
+                    new_token = await instance.refresh_token()
+                    if new_token:
+                        logger.info(f"账号 {cookie_id} Token刷新成功")
+                    else:
+                        logger.warning(f"账号 {cookie_id} Token刷新失败，将在下次连接时重试")
+                except Exception as e:
+                    logger.warning(f"账号 {cookie_id} Token刷新异常: {e}")
+            else:
+                logger.info(f"账号 {cookie_id} Token有效（{token_age/3600:.1f}小时），无需刷新")
+                
+        except Exception as e:
+            logger.error(f"刷新Token时出错 {cookie_id}: {e}")
     
     async def _run_periodic_check(self):
         """运行定期检查任务"""
@@ -322,7 +366,46 @@ class CookieValidator:
             return False, "Cookie不存在"
         
         # 手动验证时不使用延迟，直接检查
-        return await self._check_and_update_cookie(cookie_id, cookie_value, use_delay=False)
+        is_valid, message = await self._check_and_update_cookie(cookie_id, cookie_value, use_delay=False)
+        
+        # 强制刷新Token（手动验证时总是尝试刷新）
+        await self._refresh_token_for_cookie_force(cookie_id)
+        
+        return is_valid, message
+    
+    async def _refresh_token_for_cookie_force(self, cookie_id: str):
+        """
+        强制刷新指定Cookie的Token（用于手动验证）
+        
+        如果该Cookie对应的XianyuLive实例正在运行，则强制调用其refresh_token方法
+        """
+        try:
+            # 尝试导入XianyuLive
+            try:
+                from XianyuAutoAsync import XianyuLive
+            except ImportError:
+                logger.info(f"无法导入XianyuLive，跳过Token刷新: {cookie_id}")
+                return
+            
+            # 获取实例
+            instance = XianyuLive.get_instance(cookie_id)
+            if not instance:
+                logger.info(f"手动验证：账号 {cookie_id} 未运行，跳过Token刷新")
+                return
+            
+            logger.info(f"手动验证：尝试刷新账号 {cookie_id} 的Token...")
+            try:
+                # 调用refresh_token方法
+                new_token = await instance.refresh_token()
+                if new_token:
+                    logger.info(f"手动验证：账号 {cookie_id} Token刷新成功")
+                else:
+                    logger.warning(f"手动验证：账号 {cookie_id} Token刷新失败")
+            except Exception as e:
+                logger.warning(f"手动验证：账号 {cookie_id} Token刷新异常: {e}")
+                
+        except Exception as e:
+            logger.error(f"手动验证：刷新Token时出错 {cookie_id}: {e}")
 
 
 # 全局Cookie验证器实例

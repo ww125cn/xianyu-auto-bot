@@ -2726,6 +2726,75 @@ class DBManager:
                 self.conn.rollback()
                 return False
 
+    def test_notification_channel(self, channel_id: int) -> dict:
+        """测试通知渠道"""
+        try:
+            channel = self.get_notification_channel(channel_id)
+            if not channel:
+                return {'success': False, 'message': '通知渠道不存在'}
+            
+            channel_type = channel.get('type')
+            config = channel.get('config', '')
+            
+            if channel_type == 'email':
+                # 测试邮件通知
+                import json
+                try:
+                    config_dict = json.loads(config)
+                    test_email = config_dict.get('recipient_email') or config_dict.get('email')
+                    if not test_email:
+                        return {'success': False, 'message': '邮件配置中缺少接收邮箱地址'}
+                    
+                    # 获取SMTP配置
+                    smtp_server = config_dict.get('smtp_server') or self.get_system_setting('smtp_server')
+                    smtp_port_str = config_dict.get('smtp_port') or self.get_system_setting('smtp_port')
+                    smtp_user = config_dict.get('email_user') or self.get_system_setting('smtp_user')
+                    smtp_password = config_dict.get('email_password') or self.get_system_setting('smtp_password')
+                    smtp_from = config_dict.get('smtp_from') or self.get_system_setting('smtp_from') or smtp_user
+                    
+                    try:
+                        smtp_port = int(smtp_port_str)
+                    except (ValueError, TypeError):
+                        smtp_port = 587
+                    
+                    if not smtp_server or not smtp_port or not smtp_user or not smtp_password:
+                        return {'success': False, 'message': 'SMTP配置不完整，请在系统设置或通知渠道中配置'}
+                    
+                    # 使用通知渠道的SMTP配置发送测试邮件
+                    import smtplib
+                    from email.mime.text import MIMEText
+                    from email.utils import formataddr
+                    
+                    msg = MIMEText('这是一封测试邮件，来自闲鱼自动回复机器人的通知渠道测试！', 'plain', 'utf-8')
+                    msg['From'] = formataddr(('闲鱼自动回复', smtp_from))
+                    msg['To'] = formataddr(('测试接收', test_email))
+                    msg['Subject'] = '【测试邮件】通知渠道测试'
+                    
+                    # 根据端口判断使用SSL还是STARTTLS
+                    if smtp_port == 465:
+                        # SSL连接
+                        with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10) as server:
+                            server.login(smtp_user, smtp_password)
+                            server.send_message(msg)
+                    else:
+                        # STARTTLS连接
+                        with smtplib.SMTP(smtp_server, smtp_port, timeout=10) as server:
+                            server.starttls()
+                            server.login(smtp_user, smtp_password)
+                            server.send_message(msg)
+                    
+                    return {'success': True, 'message': '测试邮件发送成功'}
+                except json.JSONDecodeError:
+                    return {'success': False, 'message': '邮件配置格式错误'}
+                except Exception as e:
+                    logger.error(f"发送测试邮件失败: {e}")
+                    return {'success': False, 'message': f'测试失败: {str(e)}'}
+            else:
+                return {'success': False, 'message': f'暂不支持测试 {channel_type} 类型的通知渠道'}
+        except Exception as e:
+            logger.error(f"测试通知渠道失败: {e}")
+            return {'success': False, 'message': f'测试失败: {str(e)}'}
+
     # -------------------- 消息通知配置操作 --------------------
     def set_message_notification(self, cookie_id: str, channel_id: int, enabled: bool = True) -> bool:
         """设置账号的消息通知"""
@@ -3449,10 +3518,11 @@ class DBManager:
                 cursor = self.conn.cursor()
                 expires_at = time.time() + (expires_minutes * 60)
 
+                created_at = time.time()
                 cursor.execute('''
-                INSERT INTO email_verifications (email, code, type, expires_at)
-                VALUES (?, ?, ?, ?)
-                ''', (email, code, code_type, expires_at))
+                INSERT INTO email_verifications (email, code, type, expires_at, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ''', (email, code, code_type, expires_at, created_at))
 
                 self.conn.commit()
                 logger.info(f"保存验证码成功: {email} ({code_type})")
@@ -3492,9 +3562,56 @@ class DBManager:
                 logger.error(f"验证邮箱验证码失败: {e}")
                 return False
 
-    async def send_verification_email(self, email: str, code: str) -> bool:
-        """发送验证码邮件（支持SMTP和API两种方式）"""
+    async def send_verification_email(self, email: str, code: str) -> dict:
+        """发送验证码邮件（支持SMTP和API两种方式）
+        
+        Returns:
+            dict: {'success': bool, 'message': str}
+        """
         try:
+            # 【冷却期检查】检查是否在冷却期内（1分钟）
+            with self.lock:
+                try:
+                    cursor = self.conn.cursor()
+                    current_time = time.time()
+                    cooldown_seconds = 60  # 60秒冷却期
+                    
+                    # 查找最近一次发送的验证码记录（先不做时间过滤，在 Python 中判断）
+                    cursor.execute('''
+                    SELECT created_at FROM email_verifications
+                    WHERE email = ?
+                    ORDER BY created_at DESC LIMIT 1
+                    ''', (email,))
+                    
+                    last_send = cursor.fetchone()
+                    if last_send:
+                        # 解析 SQLite 的时间字符串格式（如 "2026-03-30 04:27:14"）
+                        try:
+                            from datetime import datetime
+                            last_created_str = last_send[0]
+                            if isinstance(last_created_str, str):
+                                # 解析为 datetime 对象
+                                dt = datetime.strptime(last_created_str, '%Y-%m-%d %H:%M:%S')
+                                last_created_at = dt.timestamp()
+                            else:
+                                # 已经是数值类型
+                                last_created_at = float(last_created_str)
+                        except (ValueError, TypeError, ImportError):
+                            last_created_at = 0
+                        
+                        # 计算等待时间
+                        time_since_last = current_time - last_created_at
+                        if time_since_last < cooldown_seconds:
+                            wait_seconds = int(cooldown_seconds - time_since_last) + 1
+                            logger.warning(f"【冷却期】{email} 发送验证码过于频繁，请等待 {wait_seconds} 秒")
+                            return {
+                                'success': False,
+                                'message': f'发送验证码过于频繁，请等待 {wait_seconds} 秒后重试',
+                                'code': 'TOO_MANY_REQUESTS'
+                            }
+                except Exception as e:
+                    logger.error(f"检查冷却期失败: {e}")
+            
             subject = "闲鱼自动回复系统 - 邮箱验证码"
             # 使用简单的纯文本邮件内容
             text_content = f"""【闲鱼自动回复系统】邮箱验证码
@@ -3520,13 +3637,23 @@ class DBManager:
 
             # 从系统设置读取SMTP配置
             try:
-                smtp_server = self.get_system_setting('smtp_server') or ''
+                smtp_server = self.get_system_setting('smtp_server') or self.get_system_setting('smtp_host') or ''
                 smtp_port = int(self.get_system_setting('smtp_port') or 0)
                 smtp_user = self.get_system_setting('smtp_user') or ''
                 smtp_password = self.get_system_setting('smtp_password') or ''
                 smtp_from = (self.get_system_setting('smtp_from') or '').strip() or smtp_user
-                smtp_use_tls = (self.get_system_setting('smtp_use_tls') or 'true').lower() == 'true'
-                smtp_use_ssl = (self.get_system_setting('smtp_use_ssl') or 'false').lower() == 'true'
+                # 根据端口自动判断是否使用SSL/TLS
+                # 465端口使用SSL，587端口使用STARTTLS
+                if smtp_port == 465:
+                    smtp_use_tls = False
+                    smtp_use_ssl = True
+                elif smtp_port == 587:
+                    smtp_use_tls = True
+                    smtp_use_ssl = False
+                else:
+                    # 其他端口读取配置或使用默认
+                    smtp_use_tls = (self.get_system_setting('smtp_use_tls') or 'false').lower() == 'true'
+                    smtp_use_ssl = (self.get_system_setting('smtp_use_ssl') or 'false').lower() == 'true'
             except Exception as e:
                 logger.error(f"读取SMTP系统设置失败: {e}")
                 # 如果读取配置失败，使用API方式
@@ -3535,7 +3662,7 @@ class DBManager:
             # 检查SMTP配置是否完整
             if smtp_server and smtp_port and smtp_user and smtp_password:
                 # 配置完整，使用SMTP方式发送
-                logger.info(f"使用SMTP方式发送验证码邮件: {email}")
+                logger.info(f"使用SMTP方式发送验证码邮件: {email}, 端口: {smtp_port}, SSL: {smtp_use_ssl}, TLS: {smtp_use_tls}")
                 return await self._send_email_via_smtp(email, subject, text_content,
                                                      smtp_server, smtp_port, smtp_user,
                                                      smtp_password, smtp_from, smtp_use_tls, smtp_use_ssl)
@@ -3552,22 +3679,27 @@ class DBManager:
                                  smtp_server: str, smtp_port: int, smtp_user: str,
                                  smtp_password: str, smtp_from: str, smtp_use_tls: bool, smtp_use_ssl: bool) -> bool:
         """使用SMTP方式发送邮件"""
+        server = None
         try:
             import smtplib
             from email.mime.text import MIMEText
             from email.mime.multipart import MIMEMultipart
+            from email.header import Header
 
             msg = MIMEMultipart()
-            msg['Subject'] = subject
+            msg['Subject'] = Header(subject, 'utf-8')
             msg['From'] = smtp_from
             msg['To'] = email
 
             msg.attach(MIMEText(text_content, 'plain', 'utf-8'))
 
+            # 设置超时
+            timeout = 30
+
             if smtp_use_ssl:
-                server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+                server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=timeout)
             else:
-                server = smtplib.SMTP(smtp_server, smtp_port)
+                server = smtplib.SMTP(smtp_server, smtp_port, timeout=timeout)
 
             server.ehlo()
             if smtp_use_tls and not smtp_use_ssl:
@@ -3579,14 +3711,20 @@ class DBManager:
             server.quit()
 
             logger.info(f"验证码邮件发送成功(SMTP): {email}")
-            return True
+            return {'success': True, 'message': '验证码发送成功'}
         except Exception as e:
             logger.error(f"SMTP发送验证码邮件失败: {e}")
+            # 确保连接关闭
+            if server:
+                try:
+                    server.quit()
+                except:
+                    pass
             # SMTP发送失败，尝试使用API方式
             logger.info(f"SMTP发送失败，尝试使用API方式发送: {email}")
             return await self._send_email_via_api(email, subject, text_content)
 
-    async def _send_email_via_api(self, email: str, subject: str, text_content: str) -> bool:
+    async def _send_email_via_api(self, email: str, subject: str, text_content: str) -> dict:
         """使用API方式发送邮件"""
         try:
             import aiohttp
@@ -3608,16 +3746,16 @@ class DBManager:
 
                         if response.status == 200:
                             logger.info(f"验证码邮件发送成功(API): {email}")
-                            return True
+                            return {'success': True, 'message': '验证码发送成功'}
                         else:
                             logger.error(f"API发送验证码邮件失败: {email}, 状态码: {response.status}, 响应: {response_text[:200]}")
-                            return False
+                            return {'success': False, 'message': '验证码发送失败，请稍后重试'}
                 except Exception as e:
                     logger.error(f"API邮件发送异常: {email}, 错误: {e}")
-                    return False
+                    return {'success': False, 'message': '验证码发送失败，请稍后重试'}
         except Exception as e:
             logger.error(f"API邮件发送方法异常: {e}")
-            return False
+            return {'success': False, 'message': '验证码发送失败，请稍后重试'}
 
     # ==================== 卡券管理方法 ====================
 

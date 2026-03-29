@@ -12,7 +12,7 @@
 
 - **后端框架**: FastAPI + Python 3.11+ 异步编程
 - **数据库**: SQLite 3 + 多用户数据隔离 + 自动迁移
-- **前端**: Bootstrap 5 + Vanilla JavaScript + 响应式设计
+- **前端**: React 18 + TypeScript + Vite + Tailwind CSS + 响应式设计
 - **通信协议**: WebSocket + RESTful API + 实时通信
 - **部署方式**: Docker + Docker Compose + 一键部署
 - **日志系统**: Loguru + 文件轮转 + 实时收集
@@ -138,32 +138,28 @@ xianyu-auto-reply/
 │       ├── order_detail_fetcher.py # 订单详情获取工具
 │       └── qr_login.py            # 二维码登录功能
 ├── 🌐 前端界面
-│   └── static/
-│       ├── index.html             # 主管理界面（集成所有功能模块）
-│       ├── login.html             # 用户登录页面
-│       ├── register.html          # 用户注册页面（邮箱验证）
-│       ├── js/
-│       │   └── app.js             # 主要JavaScript逻辑和所有功能模块
-│       ├── css/
-│       │   ├── variables.css      # CSS变量定义
-│       │   ├── layout.css         # 布局样式
-│       │   ├── components.css     # 组件样式
-│       │   ├── accounts.css       # 账号管理样式
-│       │   ├── keywords.css       # 关键词管理样式
-│       │   ├── items.css          # 商品管理样式
-│       │   ├── logs.css           # 日志管理样式
-│       │   ├── notifications.css  # 通知样式
-│       │   ├── dashboard.css      # 仪表板样式
-│       │   ├── admin.css          # 管理员样式
-│       │   └── app.css            # 主应用样式
-│       ├── lib/
-│       │   ├── bootstrap/         # Bootstrap框架
-│       │   └── bootstrap-icons/   # Bootstrap图标
-│       ├── uploads/
-│       │   └── images/            # 上传的图片文件
-│       ├── xianyu_js_version_2.js # 闲鱼JavaScript工具库
-│       ├── wechat-group.png       # 微信群二维码
-│       └── qq-group.png           # QQ群二维码
+│   ├── frontend/                  # React + TypeScript + Vite 前端项目
+│   │   ├── public/                # 静态资源
+│   │   │   ├── static/            # 图片等静态文件
+│   │   │   └── favicon.svg        # 网站图标
+│   │   ├── src/                   # 源代码
+│   │   │   ├── api/               # API调用接口
+│   │   │   ├── components/        # 通用组件
+│   │   │   ├── pages/             # 页面组件
+│   │   │   ├── store/             # 状态管理
+│   │   │   ├── styles/            # 样式文件
+│   │   │   ├── types/             # TypeScript类型定义
+│   │   │   ├── utils/             # 工具函数
+│   │   │   ├── App.tsx            # 应用主组件
+│   │   │   └── main.tsx           # 应用入口
+│   │   ├── package.json           # 前端依赖配置
+│   │   ├── tailwind.config.js     # Tailwind CSS配置
+│   │   └── vite.config.ts         # Vite配置
+│   └── static/                    # 前端构建输出目录
+│       ├── assets/                # 构建后的静态资源
+│       ├── static/                # 静态文件
+│       ├── favicon.svg            # 网站图标
+│       └── index.html             # 构建后的主页面
 ├── 🐳 Docker部署
 │   ├── Dockerfile                 # Docker镜像构建文件（优化版）
 │   ├── Dockerfile-cn             # 国内优化版Docker镜像构建文件
@@ -194,6 +190,64 @@ xianyu-auto-reply/
 </details>
 
 ## 🆕 最新更新
+
+### 2026年3月30日更新
+
+**🐛 Bug修复**
+
+- ✅ 修复Token刷新重试机制：实现6次失败后自动停止所有任务，防止账号被封
+- ✅ 修复SQLite时间格式解析：解决负数等待时间问题
+- ✅ 修复邮件通知渠道测试功能：兼容recipient_email和email字段，支持渠道独立SMTP配置
+- ✅ 修复系统设置邮件测试接口：添加await关键字调用异步函数
+- ✅ 修复CSRF中间件：对带Authorization header的API请求跳过检查
+- ✅ 修复SMTP连接意外关闭：根据端口自动判断SSL（465）/STARTTLS（587）
+- ✅ 修复验证码冷却期：添加发送邮件验证码后60秒冷却期检查
+- ✅ 修复极验验证422错误：修复字段名validate_code → validate
+- ✅ 修复登录接口500错误：添加完整的try-except错误处理
+- ✅ 修复GeetestValidateRequest字段名警告：使用Field(alias="validate")避免与BaseModel冲突
+- ✅ 修复数据管理页面表头显示英文：添加完整的中文列名映射
+- ✅ 修复刷新Token状态显示：添加token_status、token_message、last_token_refresh字段
+- ✅ 修复cookie_manager未保存live实例引用：添加live_instances字典和get_live_instance方法
+
+**✨ 新增功能**
+
+- ✅ 添加邮件通知渠道测试接口：支持独立SMTP配置测试
+- ✅ 添加系统设置邮件测试接口
+- ✅ 添加商品擦亮功能API接口：在售商品列表、一键擦亮、定时擦亮、取消定时擦亮、擦亮历史
+- ✅ 添加通知渠道测试接口
+- ✅ 完善AI滑块自主学习功能：自动记录、轨迹分析、参数优化、策略推荐
+- ✅ 完善扫码登录获取最新token功能
+- ✅ 完善自动登录获取最新token功能
+
+**📊 功能优化**
+
+- ✅ 优化Token状态显示：实时获取live实例的Token状态
+- ✅ 优化数据管理：添加完整的中文列名映射
+- ✅ 优化cookie_manager：添加live实例保存和获取功能
+
+### 2026年3月更新
+
+**🌟 前端全新升级**
+
+- ✅ 重构前端为 React 18 + TypeScript + Vite + Tailwind CSS
+- ✅ 全新现代化 UI 设计，响应式布局支持多设备
+- ✅ 优化前端性能，提升加载速度和用户体验
+- ✅ 完善的 TypeScript 类型定义，提高代码可维护性
+- ✅ 集成 Zustand 状态管理，简化状态管理逻辑
+- ✅ 使用 React Query 优化 API 调用和缓存策略
+
+**🔧 后端功能增强**
+
+- ✅ 优化数据库查询性能，减少响应时间
+- ✅ 增强错误处理和日志记录，提高系统稳定性
+- ✅ 完善的 API 文档，便于前端集成和调试
+- ✅ 优化 WebSocket 连接管理，减少资源消耗
+
+**🛠️ 部署与配置优化**
+
+- ✅ 简化 Docker 部署流程，支持一键启动
+- ✅ 优化环境变量配置，提高安全性
+- ✅ 完善的部署文档和故障排查指南
 
 ### 2025年1月更新
 
@@ -246,10 +300,11 @@ xianyu-auto-reply/
 ```bash
 # 1. 克隆项目
 git clone https://github.com/ww125cn/xianyu-auto-bot.git
-cd xianyu-super-butler
+cd xianyu-auto-bot
 
 # 2. 安装依赖
 pip install -r requirements.txt
+#python -m playwright install chromium 
 
 # 3. 构建前端
 cd frontend
@@ -302,4 +357,3 @@ npm run dev
 
 # 访问 http://localhost:3000
 ```
-

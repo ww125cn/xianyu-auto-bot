@@ -30,6 +30,9 @@ export const getAccountDetails = async (): Promise<AccountDetail[]> => {
     is_valid?: boolean | null
     validation_message?: string
     last_validated_at?: string
+    token_status?: boolean | null
+    token_message?: string
+    last_token_refresh?: number
   }
   const data = await get<BackendAccountDetail[]>('/cookies/details')
   // 后端返回 value 字段，前端使用 cookie 字段
@@ -48,6 +51,9 @@ export const getAccountDetails = async (): Promise<AccountDetail[]> => {
     is_valid: item.is_valid,
     validation_message: item.validation_message,
     last_validated_at: item.last_validated_at,
+    token_status: item.token_status,
+    token_message: item.token_message,
+    last_token_refresh: item.last_token_refresh,
   }))
 }
 
@@ -199,4 +205,69 @@ export const updateAIReplySettings = (cookieId: string, settings: Partial<AIRepl
 // 获取所有账号的AI回复设置
 export const getAllAIReplySettings = (): Promise<Record<string, AIReplySettings>> => {
   return get('/ai-reply-settings')
+}
+
+// ==================== 商品擦亮 API ====================
+
+export interface PolishResult {
+  item_id: string
+  success: boolean
+  message: string
+  polished_at: string | null
+}
+
+export interface PolishResponse {
+  success: boolean
+  message: string
+  results: PolishResult[]
+  success_count: number
+  total_count: number
+}
+
+export interface OnSaleItem {
+  item_id: string
+  title: string
+  price: string
+  image: string
+  status: string
+}
+
+export interface OnSaleItemsResponse {
+  success: boolean
+  items: OnSaleItem[]
+}
+
+export interface PolishHistoryResponse {
+  success: boolean
+  history: PolishResult[]
+}
+
+// 一键擦亮所有商品
+export const polishAllItems = (cookieId: string): Promise<PolishResponse> => {
+  return post(`/cookies/${cookieId}/polish`)
+}
+
+// 获取在售商品列表
+export const getOnSaleItems = (cookieId: string): Promise<OnSaleItemsResponse> => {
+  return get(`/cookies/${cookieId}/items`)
+}
+
+// 设置定时擦亮
+export const schedulePolish = (
+  cookieId: string, 
+  hour: number = 9, 
+  minute: number = 0,
+  randomDelay: boolean = true
+): Promise<ApiResponse> => {
+  return post(`/cookies/${cookieId}/polish/schedule?hour=${hour}&minute=${minute}&random_delay=${randomDelay}`)
+}
+
+// 取消定时擦亮
+export const cancelScheduledPolish = (cookieId: string): Promise<ApiResponse> => {
+  return del(`/cookies/${cookieId}/polish/schedule`)
+}
+
+// 获取擦亮历史
+export const getPolishHistory = (cookieId: string, limit: number = 10): Promise<PolishHistoryResponse> => {
+  return get(`/cookies/${cookieId}/polish/history?limit=${limit}`)
 }

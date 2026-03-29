@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from '@/store/authStore'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { Login } from '@/pages/auth/Login'
+import { Register } from '@/pages/auth/Register'
 import { Dashboard } from '@/pages/dashboard/Dashboard'
 import { Accounts } from '@/pages/accounts/Accounts'
 import { Items } from '@/pages/items/Items'
@@ -129,6 +130,7 @@ function App() {
       <Routes>
         {/* Public routes */}
         <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
 
         {/* Protected routes */}
         <Route

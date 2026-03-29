@@ -11,6 +11,9 @@ export interface LoginRequest {
   password?: string
   email?: string
   verification_code?: string
+  geetest_challenge?: string
+  geetest_validate?: string
+  geetest_seccode?: string
 }
 
 export interface LoginResponse {
@@ -46,6 +49,9 @@ export interface AccountDetail extends Account {
   username?: string
   login_password?: string
   show_browser?: boolean
+  token_status?: boolean | null
+  token_message?: string
+  last_token_refresh?: number
 }
 
 // 关键词相关类型

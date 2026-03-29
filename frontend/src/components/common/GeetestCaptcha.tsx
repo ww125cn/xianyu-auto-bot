@@ -136,10 +136,10 @@ export function GeetestCaptcha({
 
             try {
               const validateRes = await geetestValidate({
-                challenge: result.geetest_challenge,
-                validate: result.geetest_validate,
-                seccode: result.geetest_seccode
-              })
+              challenge: result.geetest_challenge,
+              validate: result.geetest_validate,
+              seccode: result.geetest_seccode
+            })
 
               if (validateRes.success) {
                 setStatus('verified')
