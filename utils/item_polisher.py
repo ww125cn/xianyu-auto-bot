@@ -90,33 +90,84 @@ class ItemPolisher:
             }
             
             # 调用闲鱼API获取在售商品
-            # 这里使用闲鱼的商品列表API
-            url = 'https://h5api.m.goofish.com/h5/mtop.taobao.idle.item.list/1.0/'
+            # 使用与XianyuAutoAsync相同的API
+            url = 'https://h5api.m.goofish.com/h5/mtop.idle.web.xyh.item.list/1.0/'
             
             params = {
                 'jsv': '2.7.2',
                 'appKey': '34839810',
                 't': str(int(time.time() * 1000)),
                 'sign': '',  # 需要计算签名
-                'api': 'mtop.taobao.idle.item.list',
                 'v': '1.0',
                 'type': 'originaljson',
+                'accountSite': 'xianyu',
                 'dataType': 'json',
+                'timeout': '20000',
+                'api': 'mtop.idle.web.xyh.item.list',
+                'sessionOption': 'AutoLoginOnly',
+                'spm_cnt': 'a21ybx.im.0.0',
+                'spm_pre': 'a21ybx.collection.menu.1.272b5141NafCNK'
             }
             
+            # 构建请求数据
+            import json
             data = {
-                'data': '{"pageNumber":1,"pageSize":20,"status":"selling"}'
+                'needGroupInfo': False,
+                'pageNumber': 1,
+                'pageSize': 20,
+                'groupName': '在售',
+                'groupId': '58877261',
+                'defaultGroup': True,
+                # 尝试从cookies中获取userId
+                "userId": cookies.get('unb', '')
             }
+            
+            data_val = json.dumps(data, separators=(',', ':'))
+            post_data = {
+                'data': data_val
+            }
+            
+            # 生成签名
+            from utils.xianyu_utils import generate_sign
+            token = cookies.get('_m_h5_tk', '').split('_')[0] if cookies.get('_m_h5_tk') else ''
+            if token:
+                sign = generate_sign(params['t'], token, data_val)
+                params['sign'] = sign
+                logger.debug(f"生成的签名: {sign}")
             
             timeout = aiohttp.ClientTimeout(total=30)
             connector = aiohttp.TCPConnector(ssl=False)
             
             async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-                async with session.post(url, params=params, data=data, headers=headers) as response:
+                async with session.post(url, params=params, data=post_data, headers=headers) as response:
                     if response.status == 200:
                         result = await response.json()
+                        logger.debug(f"获取商品列表响应: {result}")
                         # 解析商品列表
-                        items = self._parse_items(result)
+                        items = []
+                        try:
+                            if result.get('ret') and result['ret'][0] == 'SUCCESS::调用成功':
+                                items_data = result.get('data', {})
+                                # 从cardList中提取商品信息
+                                card_list = items_data.get('cardList', [])
+                                
+                                # 解析cardList中的商品信息
+                                for card in card_list:
+                                    card_data = card.get('cardData', {})
+                                    if card_data:
+                                        # 提取商品基本信息
+                                        item_info = {
+                                            'item_id': card_data.get('id', ''),
+                                            'title': card_data.get('title', ''),
+                                            'price': card_data.get('priceInfo', {}).get('price', ''),
+                                            'image': card_data.get('picInfo', {}).get('picUrl', ''),
+                                            'status': card_data.get('itemStatus', 0),
+                                        }
+                                        if item_info['item_id']:
+                                            items.append(item_info)
+                        except Exception as e:
+                            logger.error(f"解析商品列表失败: {e}")
+                        
                         logger.info(f"【{cookie_id}】获取到 {len(items)} 个在售商品")
                         return items
                     else:
@@ -191,22 +242,37 @@ class ItemPolisher:
                 }
                 
                 # 调用闲鱼擦亮API
-                url = 'https://h5api.m.goofish.com/h5/mtop.taobao.idle.item.refresh/1.0/'
+                url = 'https://h5api.m.goofish.com/h5/mtop.taobao.idle.item.polish/1.0/'
                 
                 params = {
                     'jsv': '2.7.2',
                     'appKey': '34839810',
                     't': str(int(time.time() * 1000)),
                     'sign': '',  # 需要计算签名
-                    'api': 'mtop.taobao.idle.item.refresh',
                     'v': '1.0',
                     'type': 'originaljson',
+                    'accountSite': 'xianyu',
                     'dataType': 'json',
+                    'timeout': '20000',
+                    'api': 'mtop.taobao.idle.item.polish',
+                    'sessionOption': 'AutoLoginOnly',
+                    'spm_cnt': 'a21ybx.im.0.0',
+                    'spm_pre': 'a21ybx.collection.menu.1.272b5141NafCNK'
                 }
                 
+                import json
+                data_val = json.dumps({"itemId": item_id})
                 data = {
-                    'data': f'{{"itemId":"{item_id}"}}'
+                    'data': data_val
                 }
+                
+                # 生成签名
+                from utils.xianyu_utils import generate_sign
+                token = cookies.get('_m_h5_tk', '').split('_')[0] if cookies.get('_m_h5_tk') else ''
+                if token:
+                    sign = generate_sign(params['t'], token, data_val)
+                    params['sign'] = sign
+                    logger.debug(f"生成的签名: {sign}")
                 
                 timeout = aiohttp.ClientTimeout(total=30)
                 connector = aiohttp.TCPConnector(ssl=False)
@@ -227,12 +293,22 @@ class ItemPolisher:
                             )
                         else:
                             error_msg = str(ret[0]) if ret else "未知错误"
-                            logger.warning(f"【{cookie_id}】商品 {item_id} 擦亮失败: {error_msg}")
-                            return PolishResult(
-                                item_id=item_id,
-                                success=False,
-                                message=error_msg
-                            )
+                            # 处理重复擦亮的情况
+                            if '宝贝已经擦亮过了' in error_msg or 'FAIL_BIZ_IDLEITEM_POLISH_AGAIN' in error_msg:
+                                logger.info(f"【{cookie_id}】商品 {item_id} 已经擦亮过了")
+                                return PolishResult(
+                                    item_id=item_id,
+                                    success=True,
+                                    message="商品已经擦亮过了",
+                                    polished_at=datetime.now()
+                                )
+                            else:
+                                logger.warning(f"【{cookie_id}】商品 {item_id} 擦亮失败: {error_msg}")
+                                return PolishResult(
+                                    item_id=item_id,
+                                    success=False,
+                                    message=error_msg
+                                )
                             
             except Exception as e:
                 logger.error(f"【{cookie_id}】擦亮商品 {item_id} 失败: {e}")

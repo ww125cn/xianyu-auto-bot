@@ -35,7 +35,6 @@ const columnNameMap: Record<string, string> = {
   // keywords
   'keyword': '关键词',
   'reply': '回复',
-  'type': '类型',
   'image_url': '图片URL',
   'fuzzy_match': '模糊匹配',
   // cookies

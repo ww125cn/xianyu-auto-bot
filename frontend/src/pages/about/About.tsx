@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ArrowUpCircle, BarChart3, Bell, Bot, CheckCircle, Code, FileText, Github, Globe, Heart, Loader2, MessageCircle, MessageSquare, RefreshCw, Truck, UserCheck, Users, X } from 'lucide-react'
+import { ArrowUpCircle, BarChart3, Bell, Bot, CheckCircle, CircleDollarSign, Code, FileText, Github, Globe, Heart, Loader2, MessageCircle, MessageSquare, RefreshCw, Truck, UserCheck, Users, X } from 'lucide-react'
 
 interface UpdateInfo {
   version: string
@@ -16,6 +16,8 @@ function compareVersions(v1: string, v2: string): number {
   for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
     const p1 = parts1[i] || 0
     const p2 = parts2[i] || 0
+    // 如果版本号格式无效（NaN），视为相等，避免错误提示
+    if (Number.isNaN(p1) || Number.isNaN(p2)) return 0
     if (p1 > p2) return 1
     if (p1 < p2) return -1
   }
@@ -39,7 +41,7 @@ export function About() {
   const [loadingChangelog, setLoadingChangelog] = useState(false)
 
   // 检查更新
-  const checkForUpdate = useCallback(async (showToast = false) => {
+  const checkForUpdate = useCallback(async (showToast = false, currentVersion?: string) => {
     setCheckingUpdate(true)
     try {
       const response = await fetch('/api/version/check')
@@ -63,13 +65,15 @@ export function About() {
           download_url: result.download_url,
         })
 
-        if (compareVersions(remoteVersion, version) > 0) {
+        // 使用传入的版本号或状态中的版本号
+        const localVersion = currentVersion || version
+        if (compareVersions(remoteVersion, localVersion) > 0) {
           setHasUpdate(true)
           if (showToast) {
             setShowUpdateModal(true)
           }
-        } else if (showToast) {
-          // 已是最新版本的提示
+        } else {
+          // 没有更新或版本相同
           setHasUpdate(false)
         }
       }
@@ -116,7 +120,10 @@ export function About() {
       .then(res => res.ok ? res.text() : null)
       .then(text => {
         if (text && text.trim().startsWith('v')) {
-          setVersion(text.trim())
+          const v = text.trim()
+          setVersion(v)
+          // 获取到版本后再检查更新，直接传入版本号避免异步状态问题
+          checkForUpdate(false, v)
         }
       })
       .catch(() => {})
@@ -130,9 +137,6 @@ export function About() {
         }
       })
       .catch(() => {})
-
-    // 自动检查更新
-    checkForUpdate(false)
   }, [checkForUpdate])
 
   return (
@@ -209,10 +213,10 @@ export function About() {
           <div className="vben-card-body text-center">
             <div
               className="w-[160px] h-[160px] mx-auto overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 cursor-pointer transition-all duration-200 hover:scale-105 hover:shadow-lg hover:border-green-400"
-              onClick={() => setPreviewImage('/static/wechat-group.png')}
+              onClick={() => setPreviewImage('/static/image/wechat-group.png')}
             >
               <img
-                src="/static/wechat-group.png"
+                src="/static/image/wechat-group.png"
                 alt="微信群二维码"
                 className="w-full h-full object-cover object-center"
                 onError={(e) => {
@@ -224,7 +228,7 @@ export function About() {
                 }}
               />
             </div>
-            <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">扫码加入微信技术交流群</p>
+            <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">扫码加入微信交流群</p>
           </div>
         </div>
         <div className="vben-card">
@@ -237,10 +241,10 @@ export function About() {
           <div className="vben-card-body text-center">
             <div
               className="w-[160px] h-[160px] mx-auto overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 cursor-pointer transition-all duration-200 hover:scale-105 hover:shadow-lg hover:border-blue-400"
-              onClick={() => setPreviewImage('/static/qq-group.png')}
+              onClick={() => setPreviewImage('/static/image/qq-group.png')}
             >
               <img
-                src="/static/qq-group.png"
+                src="/static/image/qq-group.png"
                 alt="QQ群二维码"
                 className="w-full h-full object-cover object-center"
                 onError={(e) => {
@@ -252,9 +256,38 @@ export function About() {
                 }}
               />
             </div>
-            <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">扫码加入QQ技术交流群</p>
+            <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">扫码加入QQ交流群</p>
           </div>
         </div>
+        <div className="vben-card">
+          <div className="vben-card-header">
+            <h2 className="vben-card-title">
+              <CircleDollarSign className="w-4 h-4 text-blue-500" />
+              微信打赏
+            </h2>
+          </div>
+          <div className="vben-card-body text-center">
+            <div
+              className="w-[160px] h-[160px] mx-auto overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 cursor-pointer transition-all duration-200 hover:scale-105 hover:shadow-lg hover:border-blue-400"
+              onClick={() => setPreviewImage('/static/image/wxpay.jpg')}
+            >
+              <img
+                src="/static/image/wxpay.jpg"
+                alt="微信打赏"
+                className="w-full h-full object-cover object-center"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none'
+                  const parent = (e.target as HTMLImageElement).parentElement
+                  if (parent) {
+                    parent.innerHTML = '<p class="text-slate-400 dark:text-slate-500 py-12 text-sm">二维码未配置</p>'
+                  }
+                }}
+              />
+            </div>
+            <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">请作者喝杯咖啡</p>
+          </div>
+        </div>
+        
       </div>
 
       {/* Features */}
@@ -300,6 +333,16 @@ export function About() {
         <div className="vben-card-body">
           <div className="flex flex-wrap gap-3">
             <a
+              href="https://github.com/ww125cn"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+            >
+              <Github className="w-4 h-4 text-slate-600 dark:text-slate-300" />
+              <span className="text-sm font-medium text-slate-700 dark:text-slate-200">经典の奶茶</span>
+              <span className="text-xs text-slate-500 dark:text-slate-400">项目二开</span>
+            </a>
+            <a
               href="https://github.com/zhinianboke"
               target="_blank"
               rel="noopener noreferrer"
@@ -307,7 +350,7 @@ export function About() {
             >
               <Github className="w-4 h-4 text-slate-600 dark:text-slate-300" />
               <span className="text-sm font-medium text-slate-700 dark:text-slate-200">zhinianboke</span>
-              <span className="text-xs text-slate-500 dark:text-slate-400">项目作者</span>
+              <span className="text-xs text-slate-500 dark:text-slate-400">项目原作者</span>
             </a>
             <a
               href="https://github.com/legeling"
@@ -331,13 +374,22 @@ export function About() {
         <div className="vben-card-body">
           <div className="flex gap-3">
             <a
+              href="https://github.com/ww125cn/xianyu-auto-bot.git"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-900 text-white hover:bg-gray-800 transition-colors text-sm"
+            >
+              <Github className="w-4 h-4" />
+              <span>GitHub二开</span>
+            </a>
+            <a
               href="https://github.com/zhinianboke/xianyu-auto-reply"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-900 text-white hover:bg-gray-800 transition-colors text-sm"
             >
               <Github className="w-4 h-4" />
-              <span>GitHub</span>
+              <span>GitHub原版</span>
             </a>
           </div>
         </div>

@@ -4235,20 +4235,22 @@ class XianyuLive:
     def _is_normal_token_expiry(self, error_message: str) -> bool:
         """检查是否是正常的令牌过期或其他不需要通知的情况"""
         # 不需要发送通知的关键词
+        # 注意：所有Token/Session过期情况都会发送通知，以便及时处理
         no_notification_keywords = [
-            # 正常的令牌过期
-            'FAIL_SYS_TOKEN_EXOIRED::令牌过期',
-            'FAIL_SYS_TOKEN_EXPIRED::令牌过期',
-            'FAIL_SYS_TOKEN_EXOIRED',
-            'FAIL_SYS_TOKEN_EXPIRED',
-            '令牌过期',
-            # Session过期（正常情况）
-            'FAIL_SYS_SESSION_EXPIRED::Session过期',
-            'FAIL_SYS_SESSION_EXPIRED',
-            'Session过期',
-            # Token定时刷新失败（会自动重试）
-            'Token定时刷新失败，将自动重试',
-            'Token定时刷新失败'
+            # # 正常的令牌过期
+            # 'FAIL_SYS_TOKEN_EXOIRED::令牌过期',
+            # 'FAIL_SYS_TOKEN_EXPIRED::令牌过期',
+            # 'FAIL_SYS_TOKEN_EXOIRED',
+            # 'FAIL_SYS_TOKEN_EXPIRED',
+            # '令牌过期',
+            # # Session过期（正常情况）
+            # 'FAIL_SYS_SESSION_EXPIRED::Session过期',
+            # 'FAIL_SYS_SESSION_EXPIRED',
+            # 'Session过期',
+            # # Token定时刷新失败（会自动重试）
+            # 'Token定时刷新失败，将自动重试',
+            # 'Token定时刷新失败'
+            # 目前所有Token和Session过期都会发送通知
         ]
 
         # 检查错误消息是否包含不需要通知的关键词

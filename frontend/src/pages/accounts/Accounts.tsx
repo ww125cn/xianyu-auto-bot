@@ -1643,57 +1643,59 @@ export function Accounts() {
                 />
               </div>
 
-              {/* 在售商品列表 */}
-              <div className="border-t border-slate-200 dark:border-slate-700 pt-4">
-                <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
-                  在售商品 ({onSaleItems.length})
-                </h3>
-                {loadingItems ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="w-6 h-6 animate-spin text-blue-500" />
+              {/* 在售商品数量 */}
+              {!polishResults && (
+                <div className="border-t border-slate-200 dark:border-slate-700 pt-4">
+                  <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
+                    在售商品 ({onSaleItems.length})
+                  </h3>
+                  {loadingItems ? (
+                    <div className="flex items-center justify-center py-4">
+                      <Loader2 className="w-6 h-6 animate-spin text-blue-500" />
+                    </div>
+                  ) : onSaleItems.length === 0 ? (
+                    <p className="text-sm text-slate-500 dark:text-slate-400 text-center py-4">
+                      暂无在售商品
+                    </p>
+                  ) : (
+                    <div className="bg-slate-50 dark:bg-slate-800 p-4 rounded-lg text-center">
+                      <p className="text-lg font-medium text-slate-700 dark:text-slate-300">
+                        可擦亮 {onSaleItems.length} 个商品
+                      </p>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                        点击下方按钮一键擦亮所有商品
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {/* 擦亮结果统计 */}
+              {polishResults && (
+                <div className="border-t border-slate-200 dark:border-slate-700 pt-4">
+                  <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
+                    擦亮结果
+                  </h3>
+                  <div className="bg-slate-50 dark:bg-slate-800 p-4 rounded-lg">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-sm text-slate-600 dark:text-slate-400">
+                        成功：
+                      </span>
+                      <span className="text-sm font-medium text-green-600 dark:text-green-400">
+                        {polishResults.filter(r => r.success).length} 个
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-slate-600 dark:text-slate-400">
+                        失败：
+                      </span>
+                      <span className="text-sm font-medium text-red-600 dark:text-red-400">
+                        {polishResults.filter(r => !r.success).length} 个
+                      </span>
+                    </div>
                   </div>
-                ) : onSaleItems.length === 0 ? (
-                  <p className="text-sm text-slate-500 dark:text-slate-400 text-center py-4">
-                    暂无在售商品
-                  </p>
-                ) : (
-                  <div className="max-h-48 overflow-y-auto space-y-2">
-                    {onSaleItems.map((item) => (
-                      <div
-                        key={item.item_id}
-                        className="flex items-center gap-3 p-2 rounded-lg bg-slate-50 dark:bg-slate-800"
-                      >
-                        {item.image && (
-                          <img
-                            src={item.image}
-                            alt={item.title}
-                            className="w-12 h-12 rounded object-cover flex-shrink-0"
-                          />
-                        )}
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-slate-700 dark:text-slate-300 truncate">
-                            {item.title}
-                          </p>
-                          <p className="text-xs text-slate-500 dark:text-slate-400">
-                            ¥{item.price}
-                          </p>
-                        </div>
-                        {polishResults && (
-                          (() => {
-                            const result = polishResults.find(r => r.item_id === item.item_id)
-                            if (!result) return null
-                            return result.success ? (
-                              <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0" />
-                            ) : (
-                              <span title={result.message}><AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0" /></span>
-                            )
-                          })()
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+                </div>
+              )}
 
               {/* 定时擦亮设置 */}
               {!polishResults && (

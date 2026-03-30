@@ -6777,6 +6777,7 @@ async def get_on_sale_items(
     """获取在售商品列表"""
     try:
         from db_manager import db_manager
+        from utils.item_polisher import item_polisher
         
         # 检查cookie是否属于当前用户
         user_id = current_user['user_id']
@@ -6785,11 +6786,15 @@ async def get_on_sale_items(
         if cookie_id not in user_cookies:
             raise HTTPException(status_code=403, detail="无权限访问该Cookie")
         
-        # 这里应该调用闲鱼自动回复机器人获取商品列表
-        # 暂时返回空列表，实际需要集成 XianyuAutoAsync
+        # 获取cookie值
+        cookie_value = user_cookies[cookie_id]
+        
+        # 调用item_polisher获取商品列表
+        items = await item_polisher.get_on_sale_items(cookie_id, cookie_value)
+        
         return {
             "success": True,
-            "items": []
+            "items": items
         }
     except HTTPException:
         raise
@@ -6806,6 +6811,8 @@ async def polish_all_items(
     """一键擦亮所有商品"""
     try:
         from db_manager import db_manager
+        from cookie_manager import manager as cookie_manager
+        from utils.item_polisher import item_polisher
         
         # 检查cookie是否属于当前用户
         user_id = current_user['user_id']
@@ -6814,11 +6821,27 @@ async def polish_all_items(
         if cookie_id not in user_cookies:
             raise HTTPException(status_code=403, detail="无权限访问该Cookie")
         
-        # 这里应该调用闲鱼自动回复机器人执行擦亮
-        # 暂时返回成功，实际需要集成 XianyuAutoAsync
+        # 获取cookie值
+        cookie_value = user_cookies[cookie_id]
+        
+        # 执行擦亮操作
+        results = await item_polisher.polish_all_items(cookie_id, cookie_value)
+        
+        # 统计结果
+        success_count = sum(1 for r in results if r.success)
+        total_count = len(results)
+        
         return {
             "success": True,
-            "message": "擦亮任务已提交"
+            "message": f"擦亮完成: {success_count}/{total_count} 个商品成功",
+            "results": [{
+                "item_id": r.item_id,
+                "success": r.success,
+                "message": r.message,
+                "polished_at": r.polished_at.isoformat() if r.polished_at else None
+            } for r in results],
+            "success_count": success_count,
+            "total_count": total_count
         }
     except HTTPException:
         raise
@@ -6838,6 +6861,7 @@ async def schedule_polish(
     """设置定时擦亮"""
     try:
         from db_manager import db_manager
+        from utils.item_polisher import item_polisher
         
         # 检查cookie是否属于当前用户
         user_id = current_user['user_id']
@@ -6846,11 +6870,15 @@ async def schedule_polish(
         if cookie_id not in user_cookies:
             raise HTTPException(status_code=403, detail="无权限访问该Cookie")
         
-        # 这里应该保存定时擦亮配置
-        # 暂时返回成功
+        # 获取cookie值
+        cookie_value = user_cookies[cookie_id]
+        
+        # 设置定时擦亮
+        await item_polisher.schedule_daily_polish(cookie_id, cookie_value, hour, minute, random_delay)
+        
         return {
             "success": True,
-            "message": "定时擦亮已设置"
+            "message": f"已设置每日 {hour:02d}:{minute:02d} 定时擦亮"
         }
     except HTTPException:
         raise
@@ -6867,6 +6895,7 @@ async def cancel_scheduled_polish(
     """取消定时擦亮"""
     try:
         from db_manager import db_manager
+        from utils.item_polisher import item_polisher
         
         # 检查cookie是否属于当前用户
         user_id = current_user['user_id']
@@ -6875,12 +6904,19 @@ async def cancel_scheduled_polish(
         if cookie_id not in user_cookies:
             raise HTTPException(status_code=403, detail="无权限访问该Cookie")
         
-        # 这里应该取消定时擦亮配置
-        # 暂时返回成功
-        return {
-            "success": True,
-            "message": "定时擦亮已取消"
-        }
+        # 取消定时擦亮
+        success = item_polisher.cancel_scheduled_polish(cookie_id)
+        
+        if success:
+            return {
+                "success": True,
+                "message": "定时擦亮已取消"
+            }
+        else:
+            return {
+                "success": False,
+                "message": "没有设置定时擦亮"
+            }
     except HTTPException:
         raise
     except Exception as e:
@@ -6897,6 +6933,7 @@ async def get_polish_history(
     """获取擦亮历史"""
     try:
         from db_manager import db_manager
+        from utils.item_polisher import item_polisher
         
         # 检查cookie是否属于当前用户
         user_id = current_user['user_id']
@@ -6905,11 +6942,22 @@ async def get_polish_history(
         if cookie_id not in user_cookies:
             raise HTTPException(status_code=403, detail="无权限访问该Cookie")
         
-        # 这里应该获取擦亮历史记录
-        # 暂时返回空列表
+        # 获取擦亮历史
+        history = item_polisher.get_polish_history(cookie_id, limit)
+        
+        # 转换为前端需要的格式
+        history_data = []
+        for item in history:
+            history_data.append({
+                "item_id": item.item_id,
+                "success": item.success,
+                "message": item.message,
+                "polished_at": item.polished_at.isoformat() if item.polished_at else None
+            })
+        
         return {
             "success": True,
-            "history": []
+            "history": history_data
         }
     except HTTPException:
         raise
