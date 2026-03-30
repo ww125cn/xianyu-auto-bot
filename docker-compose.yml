@@ -1,8 +1,7 @@
 services:
   xianyu-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # 使用本地导入的镜像，而不是重新构建
+    image: xianyu-auto-bot:local
     container_name: xianyu-auto-bot
     restart: unless-stopped
     # 使用root用户避免权限问题
