@@ -3372,7 +3372,7 @@ def batch_delete_item_default_reply(cid: str, delete_data: BatchDeleteItemDefaul
 
 
 @app.post('/items/{cid}/{item_id}/default-reply/upload-image')
-async def upload_item_default_reply_image(cid: str, item_id: str, image: UploadFile = File(...), current_user: Dict[str, Any] = Depends(get_current_user)):
+async def upload_item_default_reply_image(cid: str, item_id: str, image: UploadFile = File(..., max_length=5242880), current_user: Dict[str, Any] = Depends(get_current_user)):
     """上传商品默认回复图片"""
     from db_manager import db_manager
     try:
@@ -4263,7 +4263,7 @@ def export_keywords(cid: str, current_user: Dict[str, Any] = Depends(get_current
 
 
 @app.post("/keywords-import/{cid}")
-async def import_keywords(cid: str, file: UploadFile = File(...), current_user: Dict[str, Any] = Depends(get_current_user)):
+async def import_keywords(cid: str, file: UploadFile = File(..., max_length=1048576), current_user: Dict[str, Any] = Depends(get_current_user)):
     """导入Excel文件中的关键词到指定账号"""
     if cookie_manager.manager is None:
         raise HTTPException(status_code=500, detail="CookieManager 未就绪")
@@ -4367,7 +4367,7 @@ async def add_image_keyword(
     cid: str,
     keyword: str = Form(...),
     item_id: str = Form(default=""),
-    image: UploadFile = File(...),
+    image: UploadFile = File(..., max_length=5242880),
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """添加图片关键词"""
@@ -4444,7 +4444,7 @@ async def add_image_keyword(
 
 @app.post("/upload-image")
 async def upload_image(
-    image: UploadFile = File(...),
+    image: UploadFile = File(..., max_length=5242880),
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """上传图片（用于卡券等功能）"""
@@ -4670,7 +4670,7 @@ def update_card(card_id: int, card_data: dict, _: None = Depends(require_auth)):
 @app.put("/cards/{card_id}/image")
 async def update_card_with_image(
     card_id: int,
-    image: UploadFile = File(...),
+    image: UploadFile = File(..., max_length=5242880),
     name: str = Form(...),
     type: str = Form(...),
     description: str = Form(default=""),
@@ -4894,7 +4894,7 @@ def export_backup(
 
 
 @app.post("/backup/import")
-def import_backup(file: UploadFile = File(...), current_user: Dict[str, Any] = Depends(get_current_user)):
+def import_backup(file: UploadFile = File(..., max_length=10485760), current_user: Dict[str, Any] = Depends(get_current_user)):
     """导入用户备份"""
     try:
         # 验证文件类型

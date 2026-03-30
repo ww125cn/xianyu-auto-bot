@@ -253,6 +253,44 @@ class SecurityScanner:
             json.dump(scan_results, f, ensure_ascii=False, indent=2)
         
         logger.info(f"安全扫描结果已保存到: {scan_file}")
+        
+        # 清理旧文件，只保留最新的6个文件
+        self._clean_old_scan_files(scan_dir, max_files=6)
+    
+    def _clean_old_scan_files(self, scan_dir, max_files=6):
+        """清理旧的扫描文件，只保留最新的max_files个文件"""
+        try:
+            # 列出所有扫描文件
+            scan_files = []
+            for filename in os.listdir(scan_dir):
+                if filename.startswith('scan_') and filename.endswith('.json'):
+                    try:
+                        # 提取时间戳
+                        timestamp = int(filename.split('_')[1].split('.')[0])
+                        file_path = os.path.join(scan_dir, filename)
+                        if os.path.isfile(file_path):
+                            scan_files.append((timestamp, file_path, filename))
+                    except (IndexError, ValueError):
+                        # 忽略文件名格式不正确的文件
+                        continue
+            
+            # 按时间戳排序（最新的在前）
+            scan_files.sort(key=lambda x: x[0], reverse=True)
+            
+            # 计算需要删除的文件
+            files_to_delete = scan_files[max_files:]
+            
+            # 删除旧文件
+            for timestamp, file_path, filename in files_to_delete:
+                try:
+                    os.remove(file_path)
+                    logger.info(f"已清理旧的安全扫描文件: {filename}")
+                except Exception as e:
+                    logger.error(f"清理旧扫描文件失败: {filename} - {e}")
+            
+            logger.info(f"安全扫描文件清理完成，保留了{min(len(scan_files), max_files)}个最新文件")
+        except Exception as e:
+            logger.error(f"清理扫描文件时出错: {e}")
     
     def start_periodic_scan(self):
         """开始定期扫描"""

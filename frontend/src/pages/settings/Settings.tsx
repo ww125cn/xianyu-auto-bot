@@ -45,7 +45,8 @@ export function Settings() {
     if (!_hasHydrated || !isAuthenticated || !token) return
     try {
       setLoading(true)
-      const result = await getSystemSettings()
+      const isAdmin = user?.is_admin || false
+      const result = await getSystemSettings(isAdmin)
       if (result.success && result.data) {
         setSettings(result.data)
       }

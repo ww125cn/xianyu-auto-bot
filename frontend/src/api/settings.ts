@@ -2,8 +2,9 @@ import { get, post, put } from '@/utils/request'
 import type { ApiResponse, SystemSettings } from '@/types'
 
 // 获取系统设置
-export const getSystemSettings = async (): Promise<{ success: boolean; data?: SystemSettings }> => {
-  const data = await get<Record<string, unknown>>('/system-settings')
+export const getSystemSettings = async (isAdmin: boolean = false): Promise<{ success: boolean; data?: SystemSettings }> => {
+  const endpoint = isAdmin ? '/system-settings' : '/system-settings/public'
+  const data = await get<Record<string, unknown>>(endpoint)
   // 将字符串 'true'/'false' 转换为布尔值
   const booleanFields = ['registration_enabled', 'show_default_login_info', 'login_captcha_enabled', 'smtp_use_tls', 'smtp_use_ssl']
   const converted: SystemSettings = {}
