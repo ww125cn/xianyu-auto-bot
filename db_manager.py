@@ -3656,8 +3656,8 @@ class DBManager:
                     smtp_use_ssl = (self.get_system_setting('smtp_use_ssl') or 'false').lower() == 'true'
             except Exception as e:
                 logger.error(f"读取SMTP系统设置失败: {e}")
-                # 如果读取配置失败，使用API方式
-                return await self._send_email_via_api(email, subject, text_content)
+                # 如果读取配置失败，返回错误
+                return {'success': False, 'message': '邮件发送失败：无法读取SMTP配置'}
 
             # 检查SMTP配置是否完整
             if smtp_server and smtp_port and smtp_user and smtp_password:
@@ -3667,9 +3667,9 @@ class DBManager:
                                                      smtp_server, smtp_port, smtp_user,
                                                      smtp_password, smtp_from, smtp_use_tls, smtp_use_ssl)
             else:
-                # 配置不完整，使用API方式发送
-                logger.info(f"SMTP配置不完整，使用API方式发送验证码邮件: {email}")
-                return await self._send_email_via_api(email, subject, text_content)
+                # 配置不完整，返回错误
+                logger.error(f"SMTP配置不完整，无法发送验证码邮件: {email}")
+                return {'success': False, 'message': '邮件发送失败：SMTP配置不完整'}
 
         except Exception as e:
             logger.error(f"发送验证码邮件异常: {e}")
@@ -3720,42 +3720,9 @@ class DBManager:
                     server.quit()
                 except:
                     pass
-            # SMTP发送失败，尝试使用API方式
-            logger.info(f"SMTP发送失败，尝试使用API方式发送: {email}")
-            return await self._send_email_via_api(email, subject, text_content)
-
-    async def _send_email_via_api(self, email: str, subject: str, text_content: str) -> dict:
-        """使用API方式发送邮件"""
-        try:
-            import aiohttp
-
-            # 使用GET请求发送邮件
-            api_url = "https://dy.zhinianboke.com/api/emailSend"
-            params = {
-                'subject': subject,
-                'receiveUser': email,
-                'sendHtml': text_content
-            }
-
-            async with aiohttp.ClientSession() as session:
-                try:
-                    logger.info(f"使用API发送验证码邮件: {email}")
-                    async with session.get(api_url, params=params, timeout=15) as response:
-                        response_text = await response.text()
-                        logger.info(f"邮件API响应: {response.status}")
-
-                        if response.status == 200:
-                            logger.info(f"验证码邮件发送成功(API): {email}")
-                            return {'success': True, 'message': '验证码发送成功'}
-                        else:
-                            logger.error(f"API发送验证码邮件失败: {email}, 状态码: {response.status}, 响应: {response_text[:200]}")
-                            return {'success': False, 'message': '验证码发送失败，请稍后重试'}
-                except Exception as e:
-                    logger.error(f"API邮件发送异常: {email}, 错误: {e}")
-                    return {'success': False, 'message': '验证码发送失败，请稍后重试'}
-        except Exception as e:
-            logger.error(f"API邮件发送方法异常: {e}")
-            return {'success': False, 'message': '验证码发送失败，请稍后重试'}
+            # SMTP发送失败，返回错误
+            logger.error(f"SMTP发送验证码邮件失败: {email}")
+            return {'success': False, 'message': '验证码发送失败，请检查SMTP配置或稍后重试'}
 
     # ==================== 卡券管理方法 ====================
 
