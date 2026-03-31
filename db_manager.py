@@ -2766,7 +2766,8 @@ class DBManager:
                     from email.utils import formataddr
                     
                     msg = MIMEText('这是一封测试邮件，来自闲鱼自动回复机器人的通知渠道测试！', 'plain', 'utf-8')
-                    msg['From'] = formataddr(('闲鱼自动回复', smtp_from))
+                    # msg['From'] = formataddr(('闲鱼自动回复', smtp_from))
+                    msg['From'] = formataddr((smtp_from, smtp_user))
                     msg['To'] = formataddr(('测试接收', test_email))
                     msg['Subject'] = '【测试邮件】通知渠道测试'
                     
@@ -3685,10 +3686,12 @@ class DBManager:
             from email.mime.text import MIMEText
             from email.mime.multipart import MIMEMultipart
             from email.header import Header
+            from email.utils import formataddr
 
             msg = MIMEMultipart()
             msg['Subject'] = Header(subject, 'utf-8')
-            msg['From'] = smtp_from
+            # msg['From'] = smtp_from
+            msg['From'] = formataddr((smtp_from, smtp_user))
             msg['To'] = email
 
             msg.attach(MIMEText(text_content, 'plain', 'utf-8'))
