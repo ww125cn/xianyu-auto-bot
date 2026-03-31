@@ -68,6 +68,18 @@ const columnNameMap: Record<string, string> = {
   'log_type': '日志类型',
   'message': '消息',
   'ip': 'IP地址',
+  'event_type': '风控类型',
+  'event_description': '事件描述',
+  'processing_result': '处理结果',
+  'processing_status': '处理状态',
+  'error_message': '错误信息',
+  // item_info
+  'item_description': '商品描述',
+  'item_category': '商品分类',
+  'item_price': '商品价格',
+  'item_detail': '商品详情',
+  'is_multi_spec': '多规格',
+  'multi_quantity_delivery': '多数量发货',
 }
 
 // 获取列的中文显示名

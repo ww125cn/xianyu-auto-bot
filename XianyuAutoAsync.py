@@ -6023,35 +6023,39 @@ class XianyuLive:
                 # 先关闭浏览器，再关闭Playwright（顺序很重要）
                 if browser:
                     try:
-                        await asyncio.wait_for(browser.close(), timeout=5.0)
-                        logger.warning(f"【{target_cookie_id}】浏览器关闭完成")
+                        await asyncio.wait_for(browser.close(), timeout=8.0)
+                        logger.info(f"【{target_cookie_id}】浏览器关闭完成")
                     except asyncio.TimeoutError:
-                        logger.warning(f"【{target_cookie_id}】浏览器关闭超时（5秒），资源可能未完全释放")
+                        logger.warning(f"【{target_cookie_id}】浏览器关闭超时（8秒），资源可能未完全释放")
                         # 尝试取消浏览器相关的任务
                         try:
                             if hasattr(browser, '_connection'):
                                 browser._connection = None
-                        except:
-                            pass
+                            if hasattr(browser, '_contexts'):
+                                browser._contexts = []
+                        except Exception as e:
+                            logger.debug(f"【{target_cookie_id}】清理浏览器内部状态时出错: {self._safe_str(e)}")
                     except Exception as e:
                         logger.warning(f"【{target_cookie_id}】关闭浏览器时出错: {self._safe_str(e)}")
                 
-                # Playwright关闭：使用更短的超时，超时后立即放弃
+                # Playwright关闭：使用合理的超时时间
                 if playwright:
                     try:
-                        logger.warning(f"【{target_cookie_id}】正在关闭Playwright...")
-                        await asyncio.wait_for(playwright.stop(), timeout=2.0)
-                        logger.warning(f"【{target_cookie_id}】Playwright关闭完成")
+                        logger.info(f"【{target_cookie_id}】正在关闭Playwright...")
+                        await asyncio.wait_for(playwright.stop(), timeout=5.0)
+                        logger.info(f"【{target_cookie_id}】Playwright关闭完成")
                     except asyncio.TimeoutError:
-                        logger.warning(f"【{target_cookie_id}】Playwright关闭超时（2秒），进程可能仍在运行")
+                        logger.warning(f"【{target_cookie_id}】Playwright关闭超时（5秒），进程可能仍在运行")
                         logger.warning(f"【{target_cookie_id}】提示：如果后续Playwright启动失败，可能需要手动清理残留进程")
                         # 尝试清理Playwright的内部状态
                         try:
                             # 取消可能正在运行的Playwright任务
                             if hasattr(playwright, '_transport'):
                                 playwright._transport = None
-                        except:
-                            pass
+                            if hasattr(playwright, '_loop'):
+                                playwright._loop = None
+                        except Exception as e:
+                            logger.debug(f"【{target_cookie_id}】清理Playwright内部状态时出错: {self._safe_str(e)}")
                     except Exception as e:
                         logger.warning(f"【{target_cookie_id}】关闭Playwright时出错: {self._safe_str(e)}")
             except Exception as cleanup_e:
@@ -6330,14 +6334,24 @@ class XianyuLive:
                     except Exception as e:
                         logger.warning(f"【{self.cookie_id}】关闭浏览器时出错: {self._safe_str(e)}")
                 
-                # Playwright关闭：使用更短的超时，超时后立即放弃
+                # Playwright关闭：使用合理的超时时间
                 if playwright:
                     try:
-                        logger.warning(f"【{self.cookie_id}】正在关闭Playwright...")
-                        await asyncio.wait_for(playwright.stop(), timeout=2.0)
-                        logger.warning(f"【{self.cookie_id}】Playwright关闭完成")
+                        logger.info(f"【{self.cookie_id}】正在关闭Playwright...")
+                        await asyncio.wait_for(playwright.stop(), timeout=5.0)
+                        logger.info(f"【{self.cookie_id}】Playwright关闭完成")
                     except asyncio.TimeoutError:
-                        logger.warning(f"【{self.cookie_id}】Playwright关闭超时（2秒），进程可能仍在运行")
+                        logger.warning(f"【{self.cookie_id}】Playwright关闭超时（5秒），进程可能仍在运行")
+                        logger.warning(f"【{self.cookie_id}】提示：如果后续Playwright启动失败，可能需要手动清理残留进程")
+                        # 尝试清理Playwright的内部状态
+                        try:
+                            # 取消可能正在运行的Playwright任务
+                            if hasattr(playwright, '_transport'):
+                                playwright._transport = None
+                            if hasattr(playwright, '_loop'):
+                                playwright._loop = None
+                        except Exception as e:
+                            logger.debug(f"【{self.cookie_id}】清理Playwright内部状态时出错: {self._safe_str(e)}")
                     except Exception as e:
                         logger.warning(f"【{self.cookie_id}】关闭Playwright时出错: {self._safe_str(e)}")
             except Exception as cleanup_e:
