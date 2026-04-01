@@ -11,10 +11,21 @@ ENV PYTHONUNBUFFERED=1 \
 # 设置工作目录
 WORKDIR /app
 
+# 更换中科大源（兼容不同基础镜像）
+RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources; \
+    fi && \
+    if [ -f /etc/apt/sources.list ]; then \
+        sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list; \
+    fi
+
 # ==================== Frontend Builder Stage ====================
 FROM node:20-alpine AS frontend-builder
 
 WORKDIR /frontend
+
+# 设置 npm 镜像
+RUN npm config set registry https://registry.npmmirror.com
 
 # 复制前端依赖文件
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
@@ -28,6 +39,9 @@ RUN pnpm build
 
 # ==================== Python Builder Stage ====================
 FROM base AS builder
+
+# 设置 pip 镜像
+ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 安装基础依赖
 RUN apt-get update && \

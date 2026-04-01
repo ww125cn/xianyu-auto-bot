@@ -359,7 +359,13 @@ setup_file_logging()
 
 # 初始化安全扫描器
 from utils.security_scanner import security_scanner
-security_scanner.start_periodic_scan()
+# 在后台异步启动安全扫描
+import asyncio
+async def start_security_scanner():
+    security_scanner.start_periodic_scan()
+
+# 创建任务但不等待，让其在后台运行
+asyncio.create_task(start_security_scanner())
 
 # 添加一条测试日志
 from loguru import logger

@@ -24,6 +24,8 @@ class SecurityScanner:
     def __init__(self):
         self.scan_interval = 3600  # 默认每小时扫描一次
         self.scan_history = []
+        self.last_scan_time = 0  # 上次扫描时间
+        self.startup_delay = 60  # 启动延迟60秒，避免影响程序启动速度
     
     def start_scan(self):
         """开始安全扫描"""
@@ -131,6 +133,41 @@ class SecurityScanner:
                     "description": f"发现 {len(outdated_packages)} 个过时的依赖项",
                     "recommendation": "运行 pip install --upgrade 来更新依赖项"
                 })
+        except Exception as e:
+            logger.error(f"依赖项扫描失败: {e}")
+        
+        return {
+            "status": "completed",
+            "issues": issues
+        }
+    
+    async def scan_dependencies_async(self):
+        """异步扫描依赖项的安全漏洞"""
+        logger.info("🔍 扫描依赖项...")
+        issues = []
+        
+        # 检查Python依赖项
+        try:
+            import asyncio
+            result = await asyncio.create_subprocess_exec(
+                'pip', 'list', '--outdated',
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                text=True
+            )
+            stdout, stderr = await result.communicate()
+            
+            if result.returncode == 0:
+                outdated_packages = stdout.strip().split('\n')[2:]  # 跳过标题行
+                if outdated_packages:
+                    issues.append({
+                        "type": "outdated_dependencies",
+                        "severity": "medium",
+                        "description": f"发现 {len(outdated_packages)} 个过时的依赖项",
+                        "recommendation": "运行 pip install --upgrade 来更新依赖项"
+                    })
+            else:
+                logger.error(f"依赖项扫描失败: {stderr}")
         except Exception as e:
             logger.error(f"依赖项扫描失败: {e}")
         
@@ -292,13 +329,44 @@ class SecurityScanner:
         except Exception as e:
             logger.error(f"清理扫描文件时出错: {e}")
     
+    async def start_scan_async(self):
+        """异步开始安全扫描"""
+        logger.info("🔒 开始安全扫描...")
+        
+        scan_results = {
+            "timestamp": datetime.now().isoformat(),
+            "scan_type": "full",
+            "results": {
+                "system_settings": self.scan_system_settings(),
+                "database": self.scan_database(),
+                "dependencies": await self.scan_dependencies_async(),
+                "file_permissions": self.scan_file_permissions(),
+                "configuration": self.scan_configuration()
+            }
+        }
+        
+        self.scan_history.append(scan_results)
+        
+        # 记录安全扫描结果
+        self.log_scan_results(scan_results)
+        
+        logger.info("🔒 安全扫描完成")
+        return scan_results
+    
     def start_periodic_scan(self):
         """开始定期扫描"""
-        logger.info(f"🔒 启动定期安全扫描，间隔: {self.scan_interval}秒")
+        logger.info(f"🔒 启动定期安全扫描，间隔: {self.scan_interval}秒，启动延迟: {self.startup_delay}秒")
         
         async def periodic_scan():
+            # 启动延迟，避免影响程序启动
+            await asyncio.sleep(self.startup_delay)
+            
             while True:
-                self.start_scan()
+                current_time = time.time()
+                # 检查是否需要扫描（避免重复扫描）
+                if current_time - self.last_scan_time >= self.scan_interval:
+                    self.last_scan_time = current_time
+                    await self.start_scan_async()
                 await asyncio.sleep(self.scan_interval)
         
         import asyncio
