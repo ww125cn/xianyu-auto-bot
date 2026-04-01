@@ -65,9 +65,9 @@ JWT_SECRET_KEY=$JWT_SECRET_KEY
 
 # ========== 建议修改 ==========
 # SQL_LOG_ENABLED=false
-TOKEN_EXPIRE_TIME=86400
+# TOKEN_EXPIRE_TIME=86400
 # WEB_PORT=8080
-MEMORY_LIMIT=2048
+# MEMORY_LIMIT=2048
 EOF
         
         if [ $? -eq 0 ]; then
